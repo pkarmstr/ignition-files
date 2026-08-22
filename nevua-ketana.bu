@@ -1,0 +1,226 @@
+variant: fcos
+version: 1.7.0
+
+# ============================================================
+# PASSWD - user accounts (generic)
+# ============================================================
+passwd:
+  users:
+    - name: keelan
+      groups:
+        - wheel
+        - sudo
+      password_hash: $y$j9T$MPeWlpl0kAJe6ioPEItF40$t1hPM7RfNM5p6bNCEhWsntmIVCSW3TI9H0yZQV08sS9
+      ssh_authorized_keys:
+        - ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAABgQDn6cVqnayaBIfYwpAu2h89YD2s1YVohNK8nD+MXEOvZZlQSjo5nQCdzymjjao87YGCgF83QF5p3yT1kP2fpmIh/MbFcJMCoXlQUP6QQrd5Mel4cRrTczhIk/77zXRDdQ+523aSTzcEN2R2DoriXyqBhdKR3+o/PRplmtVaV1O+P5C3+hzvho4d8TqZInX6RquoL4azJgaL/YdQK/X1vyCKYT9Nko76iM3ORbNbRcdL/qxM2zUie0DITMpwbb8+kT2YKsdDF2XpC7UPMZLOz4QxjZNfwCmh3im/RC7iHyjo5PU47oXniObr0wJ6F0bgnHdMwidVSL6qIkaGRiB4tg1Tw7JHrh7XNomoL0vZ5zdVKKY2ah67As14lbs2xli2fQsmbSGX1oT7ONxufQoAXmxyC973zYy/m4GBchaQUpxzgSfdk7vA7DIe4t2CVJ3wzOx3SSi0Nz8L2lzOCRCtLOZRI7Nj1RkqiyU6e1MdRf8LQtZ1tYQCDyAt/x8l4tNeAKE= keelan@erevrav
+
+# ============================================================
+# STORAGE - filesystem layout
+# ============================================================
+storage:
+
+  # --- Machine-specific: disk devices (nevua-ketana) ---
+  devices:
+    # Wipe NVMe (cache device for bcache)
+    - device: /dev/disk/by-id/nvme-CT1000P510SSD8_2537E9CABC5C
+      wipe_table_override: true
+    # Wipe HDD (backing device for bcache)
+    - device: /dev/disk/by-id/wwn-0x5000039e58d0650e
+      wipe_table_override: true
+
+  # --- Directories ---
+  directories:
+    - path: /etc/ucore-autorebase
+      mode: 0754
+    - path: /var/mnt/cached-storage
+      mode: 0755
+
+  # --- Files ---
+  files:
+    # Machine-specific: hostname (nevua-ketana)
+    - path: /etc/hostname
+      mode: 0644
+      overwrite: true
+      contents:
+        inline: nevua-ketana
+
+    # Machine-specific: WoL helper (nevua-ketana)
+    - path: /usr/local/bin/wol-enable.sh
+      mode: 0755
+      overwrite: true
+      contents:
+        inline: |
+          #!/bin/bash
+          set -euo pipefail
+          IFACE="enp14s0"
+          echo "Enabling Wake-on-LAN on $IFACE..."
+          ethtool -s "$IFACE" wol g
+          ethtool "$IFACE" | grep -i "wake-on"
+
+# ============================================================
+# SYSTEMD UNITS
+# ============================================================
+systemd:
+  units:
+
+    # --- Generic: uCore autorebase chain ---
+    # Runs across 2 boots: unsigned rebase → reboot → signed rebase → reboot
+    # After both complete, these units are disabled and never run again.
+
+    - name: ucore-unsigned-autorebase.service
+      enabled: true
+      contents: |
+        [Unit]
+        Description=uCore autorebase to unsigned OCI and reboot
+        ConditionPathExists=!/etc/ucore-autorebase/unverified
+        ConditionPathExists=!/etc/ucore-autorebase/signed
+        After=network-online.target
+        Wants=network-online.target
+
+        [Service]
+        Type=oneshot
+        StandardOutput=journal+console
+        ExecStart=/usr/bin/rpm-ostree rebase --bypass-driver ostree-unverified-registry:ghcr.io/ublue-os/ucore-minimal:stable-nvidia
+        ExecStart=/usr/bin/touch /etc/ucore-autorebase/unverified
+        ExecStart=/usr/bin/systemctl disable ucore-unsigned-autorebase.service
+        ExecStart=/usr/bin/systemctl reboot
+
+        [Install]
+        WantedBy=multi-user.target
+
+    - name: ucore-signed-autorebase.service
+      enabled: true
+      contents: |
+        [Unit]
+        Description=uCore autorebase to signed OCI and reboot
+        ConditionPathExists=/etc/ucore-autorebase/unverified
+        ConditionPathExists=!/etc/ucore-autorebase/signed
+        After=network-online.target
+        Wants=network-online.target
+
+        [Service]
+        Type=oneshot
+        StandardOutput=journal+console
+        ExecStart=/usr/bin/rpm-ostree rebase --bypass-driver ostree-image-signed:docker://ghcr.io/ublue-os/ucore-minimal:stable-nvidia
+        ExecStart=/usr/bin/touch /etc/ucore-autorebase/signed
+        ExecStart=/usr/bin/systemctl disable ucore-signed-autorebase.service
+        ExecStart=/usr/bin/systemctl reboot
+
+        [Install]
+        WantedBy=multi-user.target
+
+    # --- Generic: package installation ---
+    # Waits for signed rebase to complete (avoids race condition).
+    # Reboots once after installing, then disables itself.
+
+    - name: install-user-packages.service
+      enabled: true
+      contents: |
+        [Unit]
+        Description=Install user packages via rpm-ostree
+        ConditionPathExists=/etc/ucore-autorebase/signed
+        ConditionPathExists=!/var/lib/install-user-packages.done
+        After=network-online.target
+        Wants=network-online.target
+
+        [Service]
+        Type=oneshot
+        RemainAfterExit=yes
+        StandardOutput=journal+console
+        ExecStart=/usr/bin/rpm-ostree install neovim tmux tree btop bcache-tools
+        ExecStart=/usr/bin/touch /var/lib/install-user-packages.done
+        ExecStart=/usr/bin/systemctl disable install-user-packages.service
+        ExecStart=/usr/bin/systemctl reboot
+
+        [Install]
+        WantedBy=multi-user.target
+
+    # --- Machine-specific: bcache setup (nevua-ketana) ---
+    # Runs after packages are installed (needs make-bcache).
+    # No reboot — fstab mount takes effect next boot.
+
+    - name: setup-bcache.service
+      enabled: true
+      contents: |
+        [Unit]
+        Description=Setup bcache (NVMe read cache for HDD, writearound policy)
+        After=install-user-packages.service
+        ConditionPathExists=/usr/sbin/make-bcache
+        ConditionPathExists=!/var/lib/setup-bcache.done
+
+        [Service]
+        Type=oneshot
+        RemainAfterExit=yes
+        StandardOutput=journal+console
+        ExecStart=/bin/bash -c '
+          set -euo pipefail
+          CACHE_DEV="/dev/disk/by-id/nvme-CT1000P510SSD8_2537E9CABC5C"
+          BACKING_DEV="/dev/disk/by-id/wwn-0x5000039e58d0650e"
+
+          echo "=== Setting up bcache ==="
+          echo "Cache device (NVMe): $CACHE_DEV"
+          echo "Backing device (HDD): $BACKING_DEV"
+
+          # Register as bcache devices
+          make-bcache -C $CACHE_DEV
+          make-bcache -B $BACKING_DEV
+
+          # Get the bcache UUIDs
+          CACHE_UUID=$(cat /sys/block/bcache*/bcache/cache_uuid 2>/dev/null || echo "")
+          BACKING_UUID=$(cat /sys/block/bcache*/bcache/backing_uuid 2>/dev/null || echo "")
+
+          # Attach cache to backing device
+          for bc in /sys/fs/bcache/*/; do
+            if [ -f "${bc}backing_dev" ]; then
+              echo "Attaching cache to backing device..."
+              echo $CACHE_UUID > ${bc}backing_dev
+              break
+            fi
+          done
+
+          # Set writearound policy (writes bypass cache, reads are cached)
+          echo writearound > /sys/block/bcache*/bcache/cache_policy
+
+          # Wait for bcache device to appear
+          sleep 5
+          BCACHE_DEV=$(ls /dev/bcache* 2>/dev/null | head -1)
+          echo "Bcache device: $BCACHE_DEV"
+
+          # Format with ext4
+          mkfs.ext4 -F $BCACHE_DEV
+
+          # Get filesystem UUID for fstab
+          FS_UUID=$(blkid -s UUID -o value $BCACHE_DEV)
+          echo "Filesystem UUID: $FS_UUID"
+
+          # Add to fstab (idempotent)
+          if ! grep -q "$FS_UUID" /etc/fstab; then
+            echo "$FS_UUID /var/mnt/cached-storage ext4 defaults,noatime 0 0" >> /etc/fstab
+          fi
+
+          echo "=== bcache setup complete ==="
+          touch /var/lib/setup-bcache.done
+          systemctl disable setup-bcache.service
+        '
+
+        [Install]
+        WantedBy=multi-user.target
+
+    # --- Machine-specific: Wake-on-LAN (nevua-ketana) ---
+    # Runs at every boot. Enables WoL on the network interface.
+
+    - name: wol-enable.service
+      enabled: true
+      contents: |
+        [Unit]
+        Description=Enable Wake-on-LAN on enp14s0
+        After=network-online.target
+        Wants=network-online.target
+
+        [Service]
+        Type=oneshot
+        RemainAfterExit=yes
+        ExecStart=/usr/local/bin/wol-enable.sh
+
+        [Install]
+        WantedBy=multi-user.target
