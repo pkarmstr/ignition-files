@@ -351,9 +351,10 @@ This script has never run. Confirmed bugs + missing guardrails:
 > 3. Kept the commented-out `#mmproj = ...` lines (plan explicitly allows; they
 >    document which mmproj file each preset would use, and the same model families
 >    have active mmproj lines elsewhere in the file).
-> 4. Observation (no change made): `tools = all` in the ini `[*]` section is
->    redundant — child processes inherit the router's CLI args — but harmless and
->    part of the live-verified setup, so it was left as-is.
+> 4. Removed `tools = all` from the ini `[*]` section (user request): it was
+>    redundant — child processes inherit the router's CLI args, which include
+>    `--tools all` — and misleading, since it does not enable the router's tools
+>    API. The quadlet `Exec=` flag is the single source of truth.
 
 1. `[Qwen3.6-27B-Dense-27GB]` has `ctx-size = 262144` **twice** — remove the duplicate.
 2. Optional: remove the redundant `--tools all` from the quadlet `Exec=` (the `[*]`
