@@ -336,6 +336,25 @@ This script has never run. Confirmed bugs + missing guardrails:
 
 ## Task 5 — `llama-server-config.ini` cleanup (cosmetic)
 
+> **Executed 2026-08-23 (pi):**
+>
+> 1. Removed the duplicate `ctx-size = 262144` from `[Qwen3.6-27B-Dense-27GB]`.
+>    Verified: 0 duplicate keys remain across all 27 sections.
+> 2. **Correction to the plan:** `--tools all` in the quadlet `Exec=` is **required** —
+>    it was kept (removal was rejected). Verified against llama.cpp source (original
+>    preset PR #17859 + current master): the tools API (`/tools` on the published
+>    port) is served by the **router** process, which only reads its own CLI params
+>    (`params.server_tools`). The preset `[*]` section cascades into the **child
+>    model processes' args only** — it never enables the router's tools API, so a
+>    server started without the CLI flag returns 403 on `/tools` regardless of the
+>    ini. Do not remove `--tools all` from `Exec=`.
+> 3. Kept the commented-out `#mmproj = ...` lines (plan explicitly allows; they
+>    document which mmproj file each preset would use, and the same model families
+>    have active mmproj lines elsewhere in the file).
+> 4. Observation (no change made): `tools = all` in the ini `[*]` section is
+>    redundant — child processes inherit the router's CLI args — but harmless and
+>    part of the live-verified setup, so it was left as-is.
+
 1. `[Qwen3.6-27B-Dense-27GB]` has `ctx-size = 262144` **twice** — remove the duplicate.
 2. Optional: remove the redundant `--tools all` from the quadlet `Exec=` (the `[*]`
    section already sets `tools = all`).
