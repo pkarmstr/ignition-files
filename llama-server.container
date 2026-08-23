@@ -7,7 +7,7 @@ After=container-storage.service
 Image=ghcr.io/ggml-org/llama.cpp:server-cuda13
 ContainerName=llama-server
 PublishPort=8001:8001/tcp
-Volume=/mnt/20tb-hdd/llama-models:/models:ro
+Volume=/mnt/cached-storage/llama-models:/models:ro
 Volume=/etc/llama-server:/config:ro
 Exec=--models-preset /config/llama-server-config.ini --port 8001 --tools all
 Environment=NVIDIA_VISIBLE_DEVICES=all
