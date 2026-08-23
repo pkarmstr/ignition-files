@@ -21,6 +21,9 @@ BACKING_DEV="/dev/disk/by-id/wwn-0x5000039e58d0650e"
 CACHE_EXPECTED_MODEL="CT1000P510SSD8"
 DESIRED_POLICY="writearound"
 MOUNT_POINT="/var/mnt/cached-storage"
+# x-systemd.after= makes the fstab-generator's mount unit wait for bcache
+# reassembly (both units are otherwise Before=local-fs.target and would race).
+FSTAB_OPTIONS="defaults,noatime,x-systemd.after=bcache-reassemble.service"
 
 # --- Helpers ---
 
@@ -233,7 +236,7 @@ if [ "$CACHE_HAS_SUPERBLOCK" = true ] && [ "$BACKING_HAS_SUPERBLOCK" = true ]; t
   else
     echo "fstab entry missing for UUID=$FS_UUID. Adding..."
     remove_fstab_mountpoint
-    echo "UUID=$FS_UUID $MOUNT_POINT ext4 defaults,noatime 0 0" >> /etc/fstab
+    echo "UUID=$FS_UUID $MOUNT_POINT ext4 $FSTAB_OPTIONS 0 0" >> /etc/fstab
   fi
 
   finish_setup
@@ -339,7 +342,7 @@ echo "Filesystem UUID: $FS_UUID"
 
 # Add to fstab (idempotent — drop any stale entry for the mount point first)
 remove_fstab_mountpoint
-echo "UUID=$FS_UUID $MOUNT_POINT ext4 defaults,noatime 0 0" >> /etc/fstab
+echo "UUID=$FS_UUID $MOUNT_POINT ext4 $FSTAB_OPTIONS 0 0" >> /etc/fstab
 
 # Verify fstab entry
 if ! grep -qF "UUID=$FS_UUID" /etc/fstab; then

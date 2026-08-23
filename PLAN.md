@@ -156,6 +156,12 @@ Changes:
 
 ## Task 3 — New: `bcache-reassemble.sh` + `bcache-reassemble.service` (missing reboot support)
 
+> **Update 2026-08-23 (after Task 4):** the mount drop-in below was replaced by
+> `x-systemd.after=bcache-reassemble.service` in the fstab line that
+> `setup-bcache.sh` writes (the fstab generator maps it to `After=` on the
+> generated mount unit). Same ordering, one fewer file, and the `.bu` no longer
+> ships a drop-in for a unit that doesn't exist until first setup.
+
 **BUG (high, functional):** the kernel does **not** auto-assemble bcache on boot (no
 udev rule, no shipped unit — verified). `setup-bcache.service` self-disables after its
 one run, so after the **first reboot** `/dev/bcache0` no longer exists and the fstab
@@ -349,19 +355,18 @@ This script has never run. Confirmed bugs + missing guardrails:
    the 20 TB backing disk; back up data elsewhere first; models go to
    `/var/mnt/cached-storage/llama-models` after setup.
 4. "Adding a New Machine": mention the new machine-specific files
-   (`setup-bcache.sh`, `bcache-reassemble.sh`, mount drop-in) and that the bcache
+   (`setup-bcache.sh`, `bcache-reassemble.sh`) and that the bcache
    device IDs appear in **two** scripts.
 
 ## Task 7 — Transpile + static verification
 
 1. `./butane.sh nevua-ketana.bu nevua-ketana.ign` (strict) — must succeed.
-2. Sanity-check the `.ign` JSON: all 6 storage files present, 8 systemd units
+2. Sanity-check the `.ign` JSON: all 7 storage files present, 8 systemd units
    (the existing 7 + `bcache-reassemble.service`), quadlet volume path is
    `/var/mnt/cached-storage/llama-models`.
 3. `bash -n setup-bcache.sh bcache-reassemble.sh` (shell syntax).
 4. Re-read the final `.bu` end-to-end for consistency (mount point string must match
-   across: `storage.directories`, `setup-bcache.sh`, `bcache-reassemble.sh` drop-in
-   unit name, quadlet volume).
+   across: `storage.directories`, `setup-bcache.sh`, quadlet volume).
 
 ## Task 8 — Provisioning runbook (user executes, agent assists)
 
@@ -403,7 +408,9 @@ Run over SSH on the target.
 
 - [ ] `systemctl status bcache-reassemble.service` — active.
 - [ ] `ls /dev/bcache*` exists; `findmnt /var/mnt/cached-storage` shows the ext4
-      bcache mount; `cat /sys/block/bcache0/bcache/cache_policy` = `writearound`.
+      bcache mount; `cat /sys/block/bcache0/bcache/cache_policy` = `writearound`;
+      `systemctl cat var-mnt-cached-storage.mount` shows
+      `After=bcache-reassemble.service` (from the fstab `x-systemd.after=`).
 - [ ] `systemctl is-enabled llama-server.service` → `generated` (expected for a
       quadlet unit without `[Install]`; **not** `disabled`); unit inactive — no
       failed container attempts.
