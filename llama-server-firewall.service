@@ -1,6 +1,6 @@
 [Unit]
 Description=Open firewall port 8001 for llama.cpp server
-Before=llama-server.container.service
+Before=llama-server.service
 Requires=firewalld.service
 After=firewalld.service
 

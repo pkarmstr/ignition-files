@@ -26,7 +26,7 @@ storage:
   # --- Directories ---
   directories:
     - path: /etc/ucore-autorebase
-      mode: 0754
+      mode: 0755
     - path: /var/mnt/cached-storage
       mode: 0755
     - path: /etc/llama-server
@@ -47,6 +47,13 @@ storage:
       overwrite: true
       contents:
         local: setup-bcache.sh
+
+    # Machine-specific: bcache reassembly on every boot (nevua-ketana)
+    - path: /usr/local/bin/bcache-reassemble.sh
+      mode: 0755
+      overwrite: true
+      contents:
+        local: bcache-reassemble.sh
 
     # Machine-specific: WoL helper (nevua-ketana)
     - path: /usr/local/bin/wol-enable.sh
@@ -76,7 +83,10 @@ storage:
         local: llama-server.container
 
     # --- llama.cpp server: firewalld rule for port 8001 ---
-    - path: /etc/containers/systemd/llama-server-firewall.service
+    # NOTE: plain .service file, so it must live in /etc/systemd/system
+    # (systemd's unit search path). /etc/containers/systemd is only scanned
+    # by the podman quadlet generator for quadlet files.
+    - path: /etc/systemd/system/llama-server-firewall.service
       mode: 0644
       overwrite: true
       contents:
@@ -190,6 +200,7 @@ systemd:
       contents: |
         [Unit]
         Description=Enable Wake-on-LAN on enp14s0
+        ConditionPathExists=/sys/class/net/enp14s0
         After=network-online.target
         Wants=network-online.target
 
@@ -201,10 +212,44 @@ systemd:
         [Install]
         WantedBy=multi-user.target
 
-    # --- llama.cpp server: enable quadlet + firewall ---
+    # --- Machine-specific: bcache reassembly (nevua-ketana) ---
+    # Runs at EVERY boot before local filesystems: the kernel does not
+    # auto-assemble bcache sets, so without this the fstab mount of
+    # /var/mnt/cached-storage fails after the first reboot.
 
-    - name: llama-server.container.service
+    - name: bcache-reassemble.service
       enabled: true
+      contents: |
+        [Unit]
+        Description=Reassemble bcache devices
+        DefaultDependencies=no
+        After=local-fs-pre.target systemd-udevd.service
+        Before=local-fs.target
+        Wants=local-fs-pre.target
+
+        [Service]
+        Type=oneshot
+        RemainAfterExit=yes
+        StandardOutput=journal+console
+        ExecStart=/usr/local/bin/bcache-reassemble.sh
+
+        [Install]
+        WantedBy=local-fs.target
+
+    # --- llama.cpp server: quadlet + firewall ---
+    # The quadlet file (llama-server.container) generates the unit
+    # "llama-server.service" (the .container suffix is stripped).
+    # It ships DISABLED: the quadlet has no [Install] section, which is
+    # the only way to keep a generated quadlet unit from starting at boot
+    # (the generator auto-applies [Install]; `systemctl enable`/`disable`
+    # do not work on generated units). The model data must be restored to
+    # /var/mnt/cached-storage/llama-models first; see the enablement steps
+    # in the comments of llama-server.container.
+    # `enabled: false` here is a harmless no-op for the generated unit
+    # (Ignition's disable is skipped when the unit is not enabled).
+
+    - name: llama-server.service
+      enabled: false
 
     - name: llama-server-firewall.service
       enabled: true

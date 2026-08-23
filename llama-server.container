@@ -7,7 +7,7 @@ After=container-storage.service
 Image=ghcr.io/ggml-org/llama.cpp:server-cuda13
 ContainerName=llama-server
 PublishPort=8001:8001/tcp
-Volume=/mnt/cached-storage/llama-models:/models:ro
+Volume=/var/mnt/cached-storage/llama-models:/models:ro
 Volume=/etc/llama-server:/config:ro
 Exec=--models-preset /config/llama-server-config.ini --port 8001 --tools all
 Environment=NVIDIA_VISIBLE_DEVICES=all
@@ -18,5 +18,19 @@ AddDevice=/dev/nvidia-uvm:/dev/nvidia-uvm
 AddDevice=/dev/nvidia-uvm-tools:/dev/nvidia-uvm-tools
 AddDevice=/dev/nvidia-modeset:/dev/nvidia-modeset
 
-[Install]
-WantedBy=multi-user.target
+# Restart goes in [Service], NOT [Container]: the podman 5.8 quadlet
+# generator rejects Restart= in [Container] (unit is not generated).
+# "always" is systemd's equivalent of docker's "unless-stopped":
+# restarts on crash/exit, but not after an explicit `systemctl stop`.
+[Service]
+Restart=always
+
+# Deliberately NO [Install] section: with [Install] the quadlet generator
+# auto-enables the unit on every boot, and `systemctl enable`/`disable`
+# do not work on generated units ("transient or generated").
+# Shipped disabled until models are restored to
+# /var/mnt/cached-storage/llama-models. To enable later:
+#   mkdir -p /etc/containers/systemd/llama-server.container.d
+#   printf '[Install]\nWantedBy=multi-user.target\n' \
+#     > /etc/containers/systemd/llama-server.container.d/enable.conf
+#   systemctl daemon-reload && systemctl start llama-server.service

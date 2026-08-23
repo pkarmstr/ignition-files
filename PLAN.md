@@ -85,6 +85,47 @@ Changes:
 
 ## Task 2 — Fix `nevua-ketana.bu`
 
+> **Executed 2026-08-23 (pi). Live-verified against the target; the plan's
+> literal instructions needed four corrections, all verified on the machine
+> (podman 5.8.4 / systemd 259):**
+>
+> 1. **Unit name is `llama-server.service`, not `llama-server.container.service`.**
+>    Podman docs + live test: "a `$name.container` file creates a `$name.service`
+>    unit" (suffix stripped). The old `.bu` entry (`llama-server.container.service`,
+>    `enabled: true`) referenced a unit that never exists.
+> 2. **`Restart=` is not supported in the quadlet `[Container]` section** — the
+>    quadlet-generator rejects it (`unsupported key 'Restart' in group
+>    'Container'`) and generates **no unit at all**. It belongs in the quadlet's
+>    `[Service]` section (passed through to the generated unit, verified).
+> 3. **`unless-stopped` is not a systemd value** — it's a docker restart policy.
+>    systemd 259: `Failed to parse Restart=unless-stopped, ignoring: Invalid
+>    argument` (silently → `Restart=no`). Used **`Restart=always`**, systemd's
+>    equivalent of docker `unless-stopped` (restart on crash; no restart after an
+>    explicit `systemctl stop`).
+> 4. **"Ship disabled" = remove `[Install]` from the quadlet.** The generator
+>    auto-applies `[Install]` on every generation (wants symlink → starts at boot),
+>    and `systemctl enable`/`disable` **do not work** on generated units ("transient
+>    or generated" / no-op). Verified: quadlet without `[Install]` generates a unit
+>    with no wants symlink (ships stopped); with `[Install]` it auto-enables.
+>    The `.bu` entry is `llama-server.service: enabled: false` — a verified-safe
+>    no-op (Ignition's `DisableUnit` skips units that `is-enabled` reports as not
+>    enabled).
+> 5. **Bonus bug found: the firewall unit was placed in `/etc/containers/systemd/`,
+>    which is NOT in systemd's unit search path** (verified with a probe unit —
+>    invisible to `systemctl`, so `enabled: true` could never take effect and port
+>    8001 would never open). Moved to `/etc/systemd/system/llama-server-firewall.service`
+>    and fixed its `Before=llama-server.service` reference.
+> 6. **Later enablement is NOT `systemctl enable`** (fails on generated units).
+>    Use the drop-in procedure documented in `llama-server.container` (also in Task 8
+>    below). Note `systemctl is-enabled llama-server.service` reports **`generated`**
+>    (exit 0), not `disabled`.
+>
+> Preset mechanics verified end-to-end from the old provisioning's boot journals:
+> Ignition 2.26 writes `/etc/systemd/system-preset/20-ignition.preset` (no
+> `systemctl enable` calls); systemd applies it at boot (wants symlinks created),
+> which is how the old ucore chain started. The new config follows the same proven
+> pattern.
+
 1. **BUG (high): quadlet volume path mismatch.** `llama-server.container` has
    `Volume=/mnt/cached-storage/llama-models:/models:ro` but the bcache mount point is
    `/var/mnt/cached-storage` (see `setup-bcache.sh` `MOUNT_POINT` and the
@@ -341,7 +382,15 @@ This script has never run. Confirmed bugs + missing guardrails:
 4. After bcache setup completes: restore models to
    `/var/mnt/cached-storage/llama-models/` (the quadlet expects exactly this path).
    The other backed-up dirs can go under `/var/mnt/cached-storage/` as well.
-5. Enable the llama server: `systemctl enable --now llama-server.container.service`
+5. Enable the llama server. `systemctl enable` does **not** work on generated
+   quadlet units — use the drop-in (see the comments in `llama-server.container`):
+   ```bash
+   sudo mkdir -p /etc/containers/systemd/llama-server.container.d
+   sudo printf '[Install]\nWantedBy=multi-user.target\n' \
+     | sudo tee /etc/containers/systemd/llama-server.container.d/enable.conf
+   sudo systemctl daemon-reload
+   sudo systemctl start llama-server.service
+   ```
    (the firewall unit is already enabled, so port 8001 is already open).
 6. **Reboot** (the critical test — see Task 9): bcache reassembly, the mount, and the
    llama server should all come back automatically.
@@ -355,8 +404,9 @@ Run over SSH on the target.
 - [ ] `systemctl status bcache-reassemble.service` — active.
 - [ ] `ls /dev/bcache*` exists; `findmnt /var/mnt/cached-storage` shows the ext4
       bcache mount; `cat /sys/block/bcache0/bcache/cache_policy` = `writearound`.
-- [ ] `systemctl is-enabled llama-server.container.service` → `disabled` (expected);
-      unit inactive — no failed container attempts.
+- [ ] `systemctl is-enabled llama-server.service` → `generated` (expected for a
+      quadlet unit without `[Install]`; **not** `disabled`); unit inactive — no
+      failed container attempts.
 - [ ] `systemctl status llama-server-firewall.service` — active;
       `sudo firewall-cmd --list-ports` includes `8001/tcp`.
 - [ ] `sudo ethtool enp14s0 | grep -i "wake-on"` shows `g` enabled
@@ -366,17 +416,18 @@ Run over SSH on the target.
 - [ ] **Reboot** → re-run the above; bcache reassembly + mount survive the reboot
       (the make-or-break test for Task 3).
 
-**Phase B — after restoring models and running
-`systemctl enable --now llama-server.container.service`:**
+**Phase B — after restoring models and enabling the server via the drop-in
+procedure (Task 8 step 5; `systemctl enable` does not work on generated
+quadlet units):**
 
 - [ ] `ls /var/mnt/cached-storage/llama-models` contains the restored models.
-- [ ] `systemctl status llama-server.container.service` — active;
+- [ ] `systemctl status llama-server.service` — active;
       `podman logs llama-server | tail` shows model loading, no missing-file errors.
 - [ ] `curl -s localhost:8001/health` (or `/v1/models`) responds.
 - [ ] **Reboot** → bcache reassembles, mount comes up, llama server starts
       automatically (full end-to-end test).
 - [ ] Crash-resilience (optional): `podman stop llama-server` → unit should restart
-      the container (`Restart=unless-stopped`).
+      the container (`Restart=always`).
 - [ ] Re-provision safety (optional, later): confirm
       `setup-bcache.service` no-ops via its done marker.
 
