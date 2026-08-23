@@ -73,49 +73,14 @@ storage:
       mode: 0644
       overwrite: true
       contents:
-        inline: |
-          [Unit]
-          Description=llama.cpp OpenAI-compatible server (CUDA)
-          Wants=container-storage.service
-          After=container-storage.service
-
-          [Container]
-          Image=ghcr.io/ggml-org/llama.cpp:server-cuda13
-          ContainerName=llama-server
-          PublishPort=8001:8001/tcp
-          Volume=/mnt/20tb-hdd/llama-models:/models:ro
-          Volume=/etc/llama-server:/config:ro
-          Exec=--models-preset /config/llama-server-config.ini --port 8001 --tools all
-          Environment=NVIDIA_VISIBLE_DEVICES=all
-          AddDevice=/dev/nvidia0:/dev/nvidia0
-          AddDevice=/dev/nvidiactl:/dev/nvidiactl
-          AddDevice=/dev/nvidia-uvm:/dev/nvidia-uvm
-          AddDevice=/dev/nvidia-uvm-tools:/dev/nvidia-uvm-tools
-          AddDevice=/dev/nvidia-modeset:/dev/nvidia-modeset
-
-          [Install]
-          WantedBy=multi-user.target
+        local: llama-server.container
 
     # --- llama.cpp server: firewalld rule for port 8001 ---
     - path: /etc/containers/systemd/llama-server-firewall.service
       mode: 0644
       overwrite: true
       contents:
-        inline: |
-          [Unit]
-          Description=Open firewall port 8001 for llama.cpp server
-          Before=llama-server.container.service
-          Requires=firewalld.service
-          After=firewalld.service
-
-          [Service]
-          Type=oneshot
-          RemainAfterExit=yes
-          ExecStart=/usr/bin/firewall-cmd --permanent --add-port=8001/tcp
-          ExecStart=/usr/bin/firewall-cmd --reload
-
-          [Install]
-          WantedBy=multi-user.target
+        local: llama-server-firewall.service
 
 # ============================================================
 # SYSTEMD UNITS
