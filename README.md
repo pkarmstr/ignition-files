@@ -2,18 +2,31 @@
 
 Provisioning configs for FCOS (Fedora CoreOS) machines using [Butane](https://coreos.github.io/butane/) → [Ignition](https://coreos.github.io/ignition/).
 
+> **⚠️ Data-loss warning — first bcache setup wipes two disks.** The first run
+> of `setup-bcache.sh` (boot 4 of the chain) wipes and reformats **both** the
+> 1 TB NVMe cache disk (`nvme0n1`) and the 20 TB backing HDD (`sda`). Any
+> existing data on those disks is destroyed. Back up anything on the backing
+> disk elsewhere **before** provisioning. After setup, restore the llama.cpp
+> models to `/var/mnt/cached-storage/llama-models` — the quadlet mounts exactly
+> that path as the container's `/models`.
+
 ## Quick Start
 
 ```bash
 # Transpile a .bu file into an .ign file
-./butane.sh --strict nevua-ketana.bu nevua-ketana.ign
+# ('--strict' is added automatically by butane.sh)
+./butane.sh nevua-ketana.bu nevua-ketana.ign
 
-# With local file references (e.g. large config files)
-./butane.sh --strict machine.bu machine.ign
-# Local files are resolved relative to the working directory.
+# 'local:' file references (embedded scripts, config files) are resolved
+# relative to the *input .bu file's directory*. butane.sh passes --files-dir
+# to the container automatically — don't pass it yourself.
 
 # Pass any butane args before the input/output files
-./butane.sh --pretty --strict nevua-ketana.bu nevua-ketana.ign
+./butane.sh --pretty nevua-ketana.bu nevua-ketana.ign
+
+# The butane image is pinned for reproducibility (default:
+# quay.io/coreos/butane:v0.29.0). Override with the BUTANE_IMAGE env var:
+BUTANE_IMAGE=quay.io/coreos/butane:v0.30.0 ./butane.sh nevua-ketana.bu nevua-ketana.ign
 ```
 
 ## Boot Sequence
@@ -27,7 +40,8 @@ The provisioning here is designed as a **4-boot chain** — each step reboots an
 | 1 | `ucore-unsigned-autorebase.service` | Rebases to unsigned OCI image, sets marker, reboots |
 | 2 | `ucore-signed-autorebase.service` | Rebases to signed OCI image, sets marker, reboots |
 | 3 | `install-user-packages.service` | Installs packages via `rpm-ostree`, sets marker, reboots |
-| 4 | `setup-bcache.service` | Sets up bcache, formats, adds fstab entry (no reboot) |
+| 4 | `setup-bcache.service` | **Wipes both bcache disks**, sets up bcache, formats, adds fstab entry (no reboot) |
+| N | `bcache-reassemble.service` | Runs at **every** boot, before local filesystems — reassembles the bcache set (the kernel does not auto-assemble), so the `/var/mnt/cached-storage` mount works after reboots |
 | N | `wol-enable.service` | Runs at **every** boot — enables Wake-on-LAN |
 
 ### Why this ordering matters
@@ -36,15 +50,20 @@ The chain uses marker files (`/etc/ucore-autorebase/unverified`, `/etc/ucore-aut
 
 **Critical:** `install-user-packages.service` depends on `ConditionPathExists=/etc/ucore-autorebase/signed`. Without this, it could race with the signed rebase on boot 2 — both units would try to `rpm-ostree` and reboot simultaneously.
 
-Once a unit has run, it disables itself (`systemctl disable ...`), so it never fires again. The only exception is `wol-enable.service`, which runs every boot by design.
+Once a unit has run, it disables itself (`systemctl disable ...` or a done marker), so it never fires again. The exceptions are the every-boot units: `bcache-reassemble.service` (reassembles the bcache set before local filesystems — without it, the `/var/mnt/cached-storage` mount fails after the first reboot) and `wol-enable.service` (enables Wake-on-LAN).
 
 ## File Structure
 
 ```
 ignition-files/
-├── butane.sh              # Transpilation wrapper
-├── README.md              # This file
-└── nevua-ketana.bu        # Per-machine butane config
+├── butane.sh                     # Transpilation wrapper
+├── README.md                     # This file
+├── nevua-ketana.bu               # Per-machine butane config
+├── setup-bcache.sh               # Machine-specific: one-shot bcache setup (embedded via local:)
+├── bcache-reassemble.sh          # Machine-specific: bcache reassembly on every boot (embedded via local:)
+├── llama-server.container        # Machine-specific: podman quadlet (embedded via local:)
+├── llama-server-config.ini       # Machine-specific: llama.cpp preset config (embedded via local:)
+└── llama-server-firewall.service # Machine-specific: firewalld rule for port 8001 (embedded via local:)
 ```
 
 Each `.bu` file is self-contained. Within each file, sections are tagged as **generic** or **machine-specific** via comments:
@@ -60,12 +79,18 @@ Butane has no `include` or inheritance mechanism. Any composability requires cus
 
 1. Copy an existing `.bu` file as a starting point
 2. Change `passwd.users[0].password_hash` and `ssh_authorized_keys`
-3. Update machine-specific sections:
-   - `storage.devices` — disk device paths
+3. Update machine-specific sections in the `.bu`:
    - `storage.files` — hostname, WoL script interface
-   - `systemd.units` — bcache devices, WoL service
-4. Remove any units that don't apply (e.g. no bcache? remove `setup-bcache.service`)
-5. Transpile: `./butane.sh --strict new-machine.bu new-machine.ign`
+   - `systemd.units` — bcache units, WoL service
+4. Update the machine-specific helper scripts (embedded into the `.bu` via
+   `local:` references):
+   - `setup-bcache.sh` — one-shot bcache setup (device IDs, mount point, policy)
+   - `bcache-reassemble.sh` — every-boot bcache reassembly
+   - ⚠️ The bcache device IDs (the by-id paths for the cache NVMe and the
+     backing HDD) appear in **both** scripts — update both.
+5. Remove any units/files that don't apply (e.g. no bcache? remove
+   `setup-bcache.service`, `bcache-reassemble.service`, and both scripts)
+6. Transpile: `./butane.sh new-machine.bu new-machine.ign`
 
 ## Butane/Ignition Basics
 

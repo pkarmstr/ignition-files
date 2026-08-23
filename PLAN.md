@@ -365,6 +365,27 @@ This script has never run. Confirmed bugs + missing guardrails:
 
 ## Task 6 — README updates
 
+> **Executed 2026-08-23 (pi):**
+>
+> 1. Quick Start now documents automatic `--files-dir` (resolved from the
+>    input file's directory), the pinned image default
+>    (`quay.io/coreos/butane:v0.29.0`), and the `BUTANE_IMAGE` override.
+> 2. Boot-sequence table gained a row for `bcache-reassemble.service`
+>    (every boot, before local filesystems); the "only exception is
+>    wol-enable" sentence in "Why this ordering matters" was updated to
+>    cover both every-boot units; the boot-4 row now says the disks are
+>    wiped.
+> 3. Prominent data-loss warning blockquote added at the top of the README
+>    (wipes 1 TB NVMe + 20 TB backing; back up first; models go to
+>    `/var/mnt/cached-storage/llama-models`).
+> 4. "Adding a New Machine" now lists `setup-bcache.sh` and
+>    `bcache-reassemble.sh` as machine-specific files and warns that the
+>    bcache device IDs appear in **both** scripts.
+> 5. Drive-by fixes (stale content in sections touched): File Structure
+>    tree now lists all 8 files; removed the stale `storage.devices` bullet
+>    (the current `.bu` has no devices section — wipe logic lives in
+>    `setup-bcache.sh`).
+
 1. `butane.sh` section: `--files-dir` is now automatic (resolved from the input
    file's directory); document the pinned image default and the `BUTANE_IMAGE`
    override.
