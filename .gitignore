@@ -1,0 +1,2 @@
+# Generated Ignition configs — derive from the .bu via ./butane.sh
+*.ign
