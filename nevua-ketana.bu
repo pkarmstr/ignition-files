@@ -55,6 +55,17 @@ storage:
       contents:
         local: bcache-reassemble.sh
 
+    # Machine-specific: make the fstab-generated mount unit wait for bcache
+    # reassembly. Two units both Before=local-fs.target would otherwise race,
+    # so the mount must be ordered After=bcache-reassemble.service.
+    - path: /etc/systemd/system/var-mnt-cached-storage.mount.d/after-bcache-reassemble.conf
+      mode: 0644
+      overwrite: true
+      contents:
+        inline: |
+          [Unit]
+          After=bcache-reassemble.service
+
     # Machine-specific: WoL helper (nevua-ketana)
     - path: /usr/local/bin/wol-enable.sh
       mode: 0755
