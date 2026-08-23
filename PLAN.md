@@ -401,6 +401,22 @@ This script has never run. Confirmed bugs + missing guardrails:
 
 ## Task 7 — Transpile + static verification
 
+> **Executed 2026-08-23 (pi) — all checks passed:**
+>
+> 1. `./butane.sh nevua-ketana.bu nevua-ketana.ign` (strict, pinned
+>    `quay.io/coreos/butane:v0.29.0`) → exit 0, valid JSON, ignition 3.6.0.
+> 2. `.ign` sanity: all 7 storage files present; 8 systemd units (the 7
+>    existing + `bcache-reassemble.service`); quadlet volume is
+>    `/var/mnt/cached-storage/llama-models`; unit enablement correct
+>    (`llama-server.service` `enabled: false`, all others true). Bonus:
+>    every embedded file (gzip+base64 data URIs) decodes byte-identical to
+>    its local source file.
+> 3. `bash -n setup-bcache.sh bcache-reassemble.sh` → both clean.
+> 4. `.bu` re-read end-to-end: mount point `/var/mnt/cached-storage` matches
+>    across `storage.directories`, `setup-bcache.sh` `MOUNT_POINT`, and the
+>    quadlet volume; by-id device paths identical in both bcache scripts;
+>    fstab line carries `x-systemd.after=bcache-reassemble.service`.
+
 1. `./butane.sh nevua-ketana.bu nevua-ketana.ign` (strict) — must succeed.
 2. Sanity-check the `.ign` JSON: all 7 storage files present, 8 systemd units
    (the existing 7 + `bcache-reassemble.service`), quadlet volume path is
