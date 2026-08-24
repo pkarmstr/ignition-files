@@ -89,8 +89,10 @@ verify_device_free() {
     echo "ERROR: $dev ($real) is currently mounted. Refusing to wipe." >&2
     exit 1
   fi
-  if [ -s "/sys/block/$name/holders" ]; then
-    echo "ERROR: $dev ($real) has active holders: $(tr '\n' ' ' < "/sys/block/$name/holders"). Refusing to wipe." >&2
+  # Check for active holders (LVM / dm-crypt / md / bcache).
+  # holders is a symlink to a directory; check if directory has entries.
+  if [ -d "/sys/block/$name/holders" ] && [ "$(ls -A "/sys/block/$name/holders" 2>/dev/null)" ]; then
+    echo "ERROR: $dev ($real) has active holders: $(ls -A "/sys/block/$name/holders" | tr '\n' ' '). Refusing to wipe." >&2
     exit 1
   fi
   # Partitions: NVMe uses <name>p<N>, SATA/SCSI uses <name><N>
@@ -102,8 +104,8 @@ verify_device_free() {
       echo "ERROR: partition $pdev is currently mounted. Refusing to wipe." >&2
       exit 1
     fi
-    if [ -s "$part/holders" ]; then
-      echo "ERROR: partition $pdev has active holders: $(tr '\n' ' ' < "$part/holders"). Refusing to wipe." >&2
+    if [ -d "$part/holders" ] && [ "$(ls -A "$part/holders" 2>/dev/null)" ]; then
+      echo "ERROR: partition $pdev has active holders: $(ls -A "$part/holders" | tr '\n' ' '). Refusing to wipe." >&2
       exit 1
     fi
   done
@@ -197,10 +199,11 @@ fi
 # drives that already contain a working bcache with data.
 CACHE_HAS_SUPERBLOCK=false
 BACKING_HAS_SUPERBLOCK=false
-if blkid -p "$CACHE_DEV" 2>/dev/null | grep -q "TYPE=bcache"; then
+# Note: blkid outputs TYPE="bcache" (with quotes), so we match on bare "bcache"
+if blkid -p "$CACHE_DEV" 2>/dev/null | grep -q "bcache"; then
   CACHE_HAS_SUPERBLOCK=true
 fi
-if blkid -p "$BACKING_DEV" 2>/dev/null | grep -q "TYPE=bcache"; then
+if blkid -p "$BACKING_DEV" 2>/dev/null | grep -q "bcache"; then
   BACKING_HAS_SUPERBLOCK=true
 fi
 
@@ -213,53 +216,98 @@ if [ "$CACHE_HAS_SUPERBLOCK" = true ] && [ "$BACKING_HAS_SUPERBLOCK" = true ]; t
 
   # The kernel does not auto-assemble bcache; use the same reassembly logic
   # as bcache-reassemble.service (exits 0 if already assembled).
-  /usr/local/bin/bcache-reassemble.sh
+  # Use || true so a failed reassembly falls through to full setup below.
+  /usr/local/bin/bcache-reassemble.sh || true
 
-  # The device may already exist (assembled at boot); match by size only.
-  BCACHE_DEV=$(wait_for_bcache_dev 15)
-  echo "Bcache device: $BCACHE_DEV"
+  # Verify the bcache is actually assembled (cache attached to backing).
+  # If state is "no cache" the cset.uuids don't match and we must reformat.
+  BCACHE_DEV=""
+  for _ in $(seq 1 15); do
+    for d in /dev/bcache*; do
+      [ -b "$d" ] || continue
+      if [ "$(blockdev --getsz "$d")" -eq "$BACKING_SECTORS" ]; then
+        STATE=$(cat "/sys/block/$(basename "$d")/bcache/state" 2>/dev/null || echo "unknown")
+        if [ "$STATE" = "active" ]; then
+          BCACHE_DEV="$d"
+          break 2
+        fi
+      fi
+    done
+    sleep 1
+  done
 
-  # Verify cache policy
-  CURRENT_POLICY=$(cat "/sys/block/$(basename "$BCACHE_DEV")/bcache/cache_policy" 2>/dev/null || echo "")
-  if [ "$CURRENT_POLICY" != "$DESIRED_POLICY" ]; then
-    echo "Policy mismatch (current=${CURRENT_POLICY:-<none>}, desired=$DESIRED_POLICY). Fixing..."
-    echo "$DESIRED_POLICY" > "/sys/block/$(basename "$BCACHE_DEV")/bcache/cache_policy"
-  fi
-
-  # Verify fstab entry
-  FS_UUID=$(blkid -s UUID -o value "$BCACHE_DEV" 2>/dev/null || echo "")
-  if [ -z "$FS_UUID" ]; then
-    echo "WARNING: Could not read filesystem UUID from $BCACHE_DEV." >&2
-  elif grep -qF "UUID=$FS_UUID" /etc/fstab; then
-    echo "Bcache already properly configured. Skipping make-bcache and mkfs."
-    echo "Existing data preserved."
+  if [ -z "$BCACHE_DEV" ]; then
+    echo "WARNING: bcache not properly assembled (state != active). "
+    echo "Falling through to full setup (wipe + format)."
   else
-    echo "fstab entry missing for UUID=$FS_UUID. Adding..."
-    remove_fstab_mountpoint
-    echo "UUID=$FS_UUID $MOUNT_POINT ext4 $FSTAB_OPTIONS 0 0" >> /etc/fstab
-  fi
+    # The device may already exist (assembled at boot); match by size only.
+    BCACHE_DEV=$(wait_for_bcache_dev 15)
+    echo "Bcache device: $BCACHE_DEV"
 
-  finish_setup
-  exit 0
+    # Verify cache policy
+    CURRENT_POLICY=$(cat "/sys/block/$(basename "$BCACHE_DEV")/bcache/cache_policy" 2>/dev/null || echo "")
+    if [ "$CURRENT_POLICY" != "$DESIRED_POLICY" ]; then
+      echo "Policy mismatch (current=${CURRENT_POLICY:-<none>}, desired=$DESIRED_POLICY). Fixing..."
+      echo "$DESIRED_POLICY" > "/sys/block/$(basename "$BCACHE_DEV")/bcache/cache_policy"
+    fi
+
+    # Verify fstab entry
+    FS_UUID=$(blkid -s UUID -o value "$BCACHE_DEV" 2>/dev/null || echo "")
+    if [ -z "$FS_UUID" ]; then
+      echo "WARNING: No filesystem found on $BCACHE_DEV — formatting..."
+      # Format with ext4
+      echo "Formatting $BCACHE_DEV with ext4..."
+      mkfs.ext4 -F "$BCACHE_DEV"
+      FS_UUID=$(blkid -s UUID -o value "$BCACHE_DEV")
+      echo "Filesystem UUID: $FS_UUID"
+    fi
+    if grep -qF "UUID=$FS_UUID" /etc/fstab; then
+      echo "Bcache already properly configured. Skipping make-bcache and mkfs."
+      echo "Existing data preserved."
+    else
+      echo "fstab entry missing for UUID=$FS_UUID. Adding..."
+      remove_fstab_mountpoint
+      echo "UUID=$FS_UUID $MOUNT_POINT ext4 $FSTAB_OPTIONS 0 0" >> /etc/fstab
+    fi
+
+    finish_setup
+    exit 0
+  fi
 fi
 
 # --- No existing bcache — full setup (wipe + format) ---
 echo "No existing bcache found. Performing full setup (wipe + format)."
 
+# --- Clean up any stale bcache registrations BEFORE guardrail checks ---
+# This removes standalone backing devices that would block wipefs.
+echo "Cleaning up stale bcache registrations..."
+# Stop any cset directories (these contain cache_dev/backing_dev symlinks)
+for bc_dir in /sys/fs/bcache/*/; do
+  [ -d "$bc_dir" ] || continue
+  echo "Stopping bcache cset: $(basename "$bc_dir")"
+  echo 1 > "${bc_dir}stop" 2>/dev/null || true
+done
+# Clean up standalone backing devices (not in a cset directory).
+# Check all block devices for bcache dirs, not just bcache* names.
+for bc_state in /sys/block/*/bcache/state; do
+  [ -e "$bc_state" ] || continue
+  dev_name=$(basename "$(dirname "$(dirname "$bc_state")")")
+  state=$(cat "$bc_state" 2>/dev/null || echo "")
+  if [ "$state" = "no cache" ] || [ "$state" = "clean" ]; then
+    echo "Cleaning up standalone backing device: /dev/$dev_name"
+    echo 1 > "/sys/block/$dev_name/bcache/stop" 2>/dev/null || true
+  fi
+done
+# If bcache module is loaded but no cset dirs remain, unload it to release
+# kernel references that block wipefs on backing devices.
+if [ -d /sys/fs/bcache ] && [ -z "$(ls -d /sys/fs/bcache/*/ 2>/dev/null)" ]; then
+  echo "Unloading bcache kernel module to release device references..."
+  rmmod bcache 2>/dev/null || true
+fi
+
 # --- Guardrail: refuse to wipe devices that are mounted or held ---
 verify_device_free "$CACHE_DEV"
 verify_device_free "$BACKING_DEV"
-
-# Clean up any stale bcache registrations from previous failed attempts.
-# cache_dev/backing_dev are symlinks to the block device's sysfs dir, so
-# stop the set via <blockdev sysfs>/bcache/state.
-echo "Cleaning up stale bcache registrations..."
-for bc_dir in /sys/fs/bcache/*/; do
-  for kind in backing_dev cache_dev; do
-    [ -e "${bc_dir}${kind}" ] || continue
-    echo stopped > "$(readlink -f "${bc_dir}${kind}")/bcache/state" 2>/dev/null || true
-  done
-done
 
 # Wipe any existing partition tables / signatures
 echo "Wiping device signatures on $CACHE_DEV..."
@@ -267,17 +315,30 @@ wipefs -a "$CACHE_DEV"
 echo "Wiping device signatures on $BACKING_DEV..."
 wipefs -a "$BACKING_DEV"
 
-# Register as bcache devices
-echo "Creating bcache superblock on cache device..."
-make-bcache -C "$CACHE_DEV"
-
+# Register as bcache devices — format backing first, then cache with matching set UUID
 echo "Creating bcache superblock on backing device..."
 make-bcache -B "$BACKING_DEV"
 
+# Ensure bcache module is loaded (cleanup may have unloaded it)
+modprobe bcache 2>/dev/null || true
+
+# Read the backing's set UUID (both devices must share the same set UUID)
+# Note: bcache-super-show outputs "cset.uuid\t\t<uuid>", so field 3 is the UUID.
+BACKING_SET_UUID=$(bcache-super-show "$BACKING_DEV" 2>/dev/null | grep -m1 '^cset\.uuid' | awk '{print $3}' || true)
+echo "Backing set UUID: $BACKING_SET_UUID"
+if [ -z "$BACKING_SET_UUID" ]; then
+  echo "ERROR: Could not read backing set UUID from superblock." >&2
+  exit 1
+fi
+
+echo "Creating bcache superblock on cache device (matching set UUID)..."
+make-bcache -C "$CACHE_DEV" --cset-uuid="$BACKING_SET_UUID"
+
 # Read the bcache UUIDs directly from the superblocks (not by globbing
 # /sys/fs/bcache, where stale entries from a failed attempt could win).
-CACHE_UUID=$(bcache-super-show "$CACHE_DEV" 2>/dev/null | grep -m1 '^UUID:' | awk '{print $2}' || true)
-BACKING_UUID=$(bcache-super-show "$BACKING_DEV" 2>/dev/null | grep -m1 '^UUID:' | awk '{print $2}' || true)
+# Note: bcache-super-show outputs "dev.uuid\t\t<uuid>", so field 3 is the UUID.
+CACHE_UUID=$(bcache-super-show "$CACHE_DEV" 2>/dev/null | grep -m1 '^dev\.uuid' | awk '{print $3}' || true)
+BACKING_UUID=$(bcache-super-show "$BACKING_DEV" 2>/dev/null | grep -m1 '^dev\.uuid' | awk '{print $3}' || true)
 echo "Cache UUID: $CACHE_UUID"
 echo "Backing UUID: $BACKING_UUID"
 if [ -z "$CACHE_UUID" ] || [ -z "$BACKING_UUID" ]; then
@@ -286,9 +347,9 @@ if [ -z "$CACHE_UUID" ] || [ -z "$BACKING_UUID" ]; then
 fi
 
 # The kernel registers a bcache device when its superblock is read; probe
-# the device until the backing's sysfs entry (with its register file)
-# appears.
-REGISTER_FILE="/sys/fs/bcache/$BACKING_UUID/register"
+# until the backing's sysfs entry (with its register file) appears.
+# The register file is at /sys/fs/bcache/<set_uuid>/register
+REGISTER_FILE="/sys/fs/bcache/$BACKING_SET_UUID/register"
 for _ in $(seq 1 10); do
   [ -f "$REGISTER_FILE" ] && break
   blkid -p "$BACKING_DEV" >/dev/null 2>&1 || true

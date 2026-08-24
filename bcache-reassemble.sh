@@ -14,13 +14,14 @@ done
 [ -b "$CACHE_DEV" ] && [ -b "$BACKING_DEV" ] || exit 0
 
 # Only proceed if both devices carry bcache superblocks
-blkid -p "$CACHE_DEV" 2>/dev/null | grep -q "TYPE=bcache" || exit 0
-blkid -p "$BACKING_DEV" 2>/dev/null | grep -q "TYPE=bcache" || exit 0
+# Note: blkid outputs TYPE="bcache" (with quotes), so we match on bare "bcache"
+blkid -p "$CACHE_DEV" 2>/dev/null | grep -q "bcache" || exit 0
+blkid -p "$BACKING_DEV" 2>/dev/null | grep -q "bcache" || exit 0
 
 modprobe bcache || exit 1
 
-CACHE_UUID=$(bcache-super-show "$CACHE_DEV" 2>/dev/null | grep -m1 '^UUID:' | awk '{print $2}' || true)
-BACKING_UUID=$(bcache-super-show "$BACKING_DEV" 2>/dev/null | grep -m1 '^UUID:' | awk '{print $2}' || true)
+CACHE_UUID=$(bcache-super-show "$CACHE_DEV" 2>/dev/null | grep -m1 '^dev\.uuid' | awk '{print $2}' || true)
+BACKING_UUID=$(bcache-super-show "$BACKING_DEV" 2>/dev/null | grep -m1 '^dev\.uuid' | awk '{print $2}' || true)
 [ -n "$CACHE_UUID" ] && [ -n "$BACKING_UUID" ] || { echo "ERROR: could not read bcache UUIDs" >&2; exit 1; }
 
 # Already assembled? Scan all existing bcache sets — the kernel names the
@@ -31,11 +32,21 @@ for d in /sys/fs/bcache/*/; do
 done
 
 # Register cache with backing device (standard reassembly procedure).
-# Try the backing's own uuid first, then the cache-set uuid, then any detached backing entry.
+# Try the backing's own uuid first, then the cache-set uuid, then any detached backing entry,
+# then the global register file (for backing devices whose cset dir is missing).
 if [ -f "/sys/fs/bcache/$BACKING_UUID/register" ]; then
-  echo "$CACHE_UUID" > "/sys/fs/bcache/$BACKING_UUID/register"
+  echo "$CACHE_UUID" > "/sys/fs/bcache/$BACKING_UUID/register" || {
+    echo "ERROR: failed to write cache UUID to $BACKING_UUID/register" >&2; exit 1; }
 elif [ -f "/sys/fs/bcache/$CACHE_UUID/register" ]; then
-  echo "$CACHE_UUID" > "/sys/fs/bcache/$CACHE_UUID/register"
+  echo "$CACHE_UUID" > "/sys/fs/bcache/$CACHE_UUID/register" || {
+    echo "ERROR: failed to write cache UUID to $CACHE_UUID/register" >&2; exit 1; }
+elif [ -f "/sys/fs/bcache/register" ]; then
+  # Global register file — attaches cache to any detached backing
+  echo "$CACHE_UUID" > /sys/fs/bcache/register || {
+    echo "ERROR: failed to write cache UUID to global register (cset.uuid mismatch?)" >&2
+    echo "  cache UUID: $CACHE_UUID" >&2
+    echo "  backing UUID: $BACKING_UUID" >&2
+    exit 1; }
 else
   registered=0
   for d in /sys/fs/bcache/*/; do
