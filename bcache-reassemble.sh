@@ -19,12 +19,14 @@ blkid -p "$BACKING_DEV" 2>/dev/null | grep -q "TYPE=bcache" || exit 0
 
 modprobe bcache || exit 1
 
-CACHE_UUID=$(bcache-super-show "$CACHE_DEV" | grep -m1 '^UUID:' | awk '{print $2}')
-BACKING_UUID=$(bcache-super-show "$BACKING_DEV" | grep -m1 '^UUID:' | awk '{print $2}')
+CACHE_UUID=$(bcache-super-show "$CACHE_DEV" 2>/dev/null | grep -m1 '^UUID:' | awk '{print $2}' || true)
+BACKING_UUID=$(bcache-super-show "$BACKING_DEV" 2>/dev/null | grep -m1 '^UUID:' | awk '{print $2}' || true)
 [ -n "$CACHE_UUID" ] && [ -n "$BACKING_UUID" ] || { echo "ERROR: could not read bcache UUIDs" >&2; exit 1; }
 
-# Already assembled?
-for d in "/sys/fs/bcache/$BACKING_UUID" "/sys/fs/bcache/$CACHE_UUID"; do
+# Already assembled? Scan all existing bcache sets — the kernel names the
+# sysfs directory after the cache-set UUID, not the backing or cache UUID,
+# so checking specific UUIDs can miss an already-assembled set.
+for d in /sys/fs/bcache/*/; do
   [ -e "$d/cache_dev" ] && { echo "bcache already assembled"; exit 0; }
 done
 

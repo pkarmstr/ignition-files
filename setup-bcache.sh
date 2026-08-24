@@ -276,8 +276,8 @@ make-bcache -B "$BACKING_DEV"
 
 # Read the bcache UUIDs directly from the superblocks (not by globbing
 # /sys/fs/bcache, where stale entries from a failed attempt could win).
-CACHE_UUID=$(bcache-super-show "$CACHE_DEV" | grep -m1 '^UUID:' | awk '{print $2}' || true)
-BACKING_UUID=$(bcache-super-show "$BACKING_DEV" | grep -m1 '^UUID:' | awk '{print $2}' || true)
+CACHE_UUID=$(bcache-super-show "$CACHE_DEV" 2>/dev/null | grep -m1 '^UUID:' | awk '{print $2}' || true)
+BACKING_UUID=$(bcache-super-show "$BACKING_DEV" 2>/dev/null | grep -m1 '^UUID:' | awk '{print $2}' || true)
 echo "Cache UUID: $CACHE_UUID"
 echo "Backing UUID: $BACKING_UUID"
 if [ -z "$CACHE_UUID" ] || [ -z "$BACKING_UUID" ]; then
