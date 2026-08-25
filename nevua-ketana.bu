@@ -19,10 +19,6 @@ passwd:
 # ============================================================
 storage:
 
-  # --- Machine-specific: disk devices (nevua-ketana) ---
-  # NOTE: No wipe_table_override here. Wipe logic is handled in setup-bcache.service
-  # so that existing bcache configurations are preserved on re-provisioning.
-
   # --- Directories ---
   directories:
     - path: /etc/ucore-autorebase
@@ -40,25 +36,6 @@ storage:
       overwrite: true
       contents:
         inline: nevua-ketana
-
-    # Machine-specific: bcache setup script (nevua-ketana)
-    - path: /usr/local/bin/setup-bcache.sh
-      mode: 0755
-      overwrite: true
-      contents:
-        local: setup-bcache.sh
-
-    # Machine-specific: bcache reassembly on every boot (nevua-ketana)
-    - path: /usr/local/bin/bcache-reassemble.sh
-      mode: 0755
-      overwrite: true
-      contents:
-        local: bcache-reassemble.sh
-
-    # NOTE: the fstab entry written by setup-bcache.sh carries
-    # x-systemd.after=bcache-reassemble.service, which orders the
-    # fstab-generated mount unit after bcache reassembly (no separate
-    # drop-in needed).
 
     # Machine-specific: WoL helper (nevua-ketana)
     - path: /usr/local/bin/wol-enable.sh
@@ -167,32 +144,10 @@ systemd:
         Type=oneshot
         RemainAfterExit=yes
         StandardOutput=journal+console
-        ExecStart=/usr/bin/rpm-ostree install neovim tmux tree btop bcache-tools
+        ExecStart=/usr/bin/rpm-ostree install neovim tmux tree btop
         ExecStart=/usr/bin/touch /var/lib/install-user-packages.done
         ExecStart=/usr/bin/systemctl disable install-user-packages.service
         ExecStart=/usr/bin/systemctl reboot
-
-        [Install]
-        WantedBy=multi-user.target
-
-    # --- Machine-specific: bcache setup (nevua-ketana) ---
-    # Runs after packages are installed (needs make-bcache).
-    # No reboot — fstab mount takes effect next boot.
-
-    - name: setup-bcache.service
-      enabled: true
-      contents: |
-        [Unit]
-        Description=Setup bcache (NVMe read cache for HDD, writearound policy)
-        After=install-user-packages.service
-        ConditionPathExists=/usr/sbin/make-bcache
-        ConditionPathExists=!/var/lib/setup-bcache.done
-
-        [Service]
-        Type=oneshot
-        RemainAfterExit=yes
-        StandardOutput=journal+console
-        ExecStart=/usr/local/bin/setup-bcache.sh
 
         [Install]
         WantedBy=multi-user.target
@@ -216,30 +171,6 @@ systemd:
 
         [Install]
         WantedBy=multi-user.target
-
-    # --- Machine-specific: bcache reassembly (nevua-ketana) ---
-    # Runs at EVERY boot before local filesystems: the kernel does not
-    # auto-assemble bcache sets, so without this the fstab mount of
-    # /var/mnt/cached-storage fails after the first reboot.
-
-    - name: bcache-reassemble.service
-      enabled: true
-      contents: |
-        [Unit]
-        Description=Reassemble bcache devices
-        DefaultDependencies=no
-        After=local-fs-pre.target systemd-udevd.service
-        Before=local-fs.target
-        Wants=local-fs-pre.target
-
-        [Service]
-        Type=oneshot
-        RemainAfterExit=yes
-        StandardOutput=journal+console
-        ExecStart=/usr/local/bin/bcache-reassemble.sh
-
-        [Install]
-        WantedBy=local-fs.target
 
     # --- llama.cpp server: quadlet + firewall ---
     # The quadlet file (llama-server.container) generates the unit
