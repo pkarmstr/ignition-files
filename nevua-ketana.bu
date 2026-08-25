@@ -37,6 +37,18 @@ storage:
       contents:
         inline: nevua-ketana
 
+    # Machine-specific: bcache setup script (nevua-ketana)
+    # Wipes the 20TB HDD and 1TB NVMe, then assembles them into a bcache
+    # device: HDD as backing, NVMe as read cache (writearound policy: reads
+    # are cached on the NVMe, writes go straight to the HDD only).
+    # All device references are by stable ID; kernel names are resolved at
+    # runtime only for size sanity-checks.
+    - path: /usr/local/bin/bcache-setup.sh
+      mode: 0755
+      overwrite: true
+      contents:
+        local: bcache-setup.sh
+
     # Machine-specific: WoL helper (nevua-ketana)
     - path: /usr/local/bin/wol-enable.sh
       mode: 0755
@@ -144,10 +156,37 @@ systemd:
         Type=oneshot
         RemainAfterExit=yes
         StandardOutput=journal+console
-        ExecStart=/usr/bin/rpm-ostree install neovim tmux tree btop
+        ExecStart=/usr/bin/rpm-ostree install neovim tmux tree btop bcache-tools
         ExecStart=/usr/bin/touch /var/lib/install-user-packages.done
         ExecStart=/usr/bin/systemctl disable install-user-packages.service
         ExecStart=/usr/bin/systemctl reboot
+
+        [Install]
+        WantedBy=multi-user.target
+
+    # --- Machine-specific: bcache setup (nevua-ketana) ---
+    # One-shot: wipes the 20TB HDD and 1TB NVMe and assembles them into a
+    # bcache device (NVMe as writearound read cache for the HDD), mounts the
+    # result at /var/mnt/cached-storage, then disables itself.
+    # Runs once install-user-packages has finished (needs bcache-tools).
+
+    - name: bcache-setup.service
+      enabled: true
+      contents: |
+        [Unit]
+        Description=Wipe and set up bcache (20TB HDD + 1TB NVMe writearound read cache)
+        ConditionPathExists=/var/lib/install-user-packages.done
+        ConditionPathExists=!/var/lib/bcache-setup.done
+        After=network-online.target
+        Wants=network-online.target
+
+        [Service]
+        Type=oneshot
+        RemainAfterExit=yes
+        StandardOutput=journal+console
+        ExecStart=/usr/local/bin/bcache-setup.sh
+        ExecStart=/usr/bin/touch /var/lib/bcache-setup.done
+        ExecStart=/usr/bin/systemctl disable bcache-setup.service
 
         [Install]
         WantedBy=multi-user.target
