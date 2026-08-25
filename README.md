@@ -4,7 +4,10 @@ Provisioning configs for FCOS (Fedora CoreOS) machines using [Butane](https://co
 
 > **Storage layout (nevua-ketana).** `/var/mnt/cached-storage` is an XFS
 > filesystem on a bcache device: 20TB HDD as backing, 1TB NVMe as writearound
-> read cache. The lifecycle is fully stateful-systemd (no `/etc/fstab`):
+> read cache. At first provisioning, Ignition wipes the partition tables of
+> both member disks (`storage.disks`, `wipe_table: true`) so the one-time
+> bcache init starts from a clean slate. The lifecycle is otherwise fully
+> stateful-systemd (no `/etc/fstab`):
 >
 > - `/usr/local/bin/bcache-setup.sh` (via `bcache-setup.sh`, embedded) —
 >   state-aware engine: every boot it *assembles* the existing bcache set

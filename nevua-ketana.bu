@@ -19,6 +19,18 @@ passwd:
 # ============================================================
 storage:
 
+  # --- Disks ---
+  # Wipe the partition tables of the two bcache member disks at first
+  # provisioning (Ignition runs once, before systemd). This gives the
+  # one-time bcache init in bcache-setup.sh a guaranteed-clean starting
+  # state (no leftover superblocks from a previous install). Only these
+  # two data disks are touched; the FCOS system disk is not in this list.
+  disks:
+    - device: /dev/disk/by-id/wwn-0x5000039e58d0650e      # 20TB TOSHIBA HDWR62AU HDD (bcache backing)
+      wipe_table: true
+    - device: /dev/disk/by-id/nvme-eui.00a07501e9cabc5c   # 1TB CT1000P510SSD8 NVMe (bcache cache)
+      wipe_table: true
+
   # --- Directories ---
   directories:
     - path: /etc/ucore-autorebase
