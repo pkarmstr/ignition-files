@@ -2,27 +2,6 @@
 
 Provisioning configs for FCOS (Fedora CoreOS) machines using [Butane](https://coreos.github.io/butane/) → [Ignition](https://coreos.github.io/ignition/).
 
-> **Storage layout (nevua-ketana).** `/var/mnt/cached-storage` is an XFS
-> filesystem on a bcache device: 20TB HDD as backing, 1TB NVMe as writearound
-> read cache. At first provisioning, Ignition wipes the partition tables of
-> both member disks (`storage.disks`, `wipe_table: true`) so the one-time
-> bcache init starts from a clean slate. The lifecycle is otherwise fully
-> stateful-systemd (no `/etc/fstab`):
->
-> - `/usr/local/bin/bcache-setup.sh` (via `bcache-setup.sh`, embedded) —
->   state-aware engine: every boot it *assembles* the existing bcache set
->   non-destructively; it only falls back to a destructive first-time init
->   (`wipefs` + `make-bcache` + `mkfs.xfs`) if assembly fails **and**
->   `/var/lib/bcache-setup.done` is absent.
-> - `bcache-assemble.service` — runs every boot (never disables itself),
->   strictly after `install-user-packages.service` (layers `bcache-tools`)
->   and before `local-fs.target` (the mount phase).
-> - `var-mnt-cached\x2dstorage.mount` — native mount unit (escaped name for
->   `/var/mnt/cached-storage`), with `nofail,x-systemd.device-timeout=1ms`
->   so boot never blocks on the device, and `Before=llama-server.service`.
-> - The llama-server quadlet `Requires=` the mount unit, so the container
->   cannot start before the model volume is up.
-
 ## Quick Start
 
 ```bash
@@ -52,9 +31,7 @@ The provisioning here is designed as a **3-boot chain** — each step reboots an
 |------|------|-------------|
 | 1 | `ucore-unsigned-autorebase.service` | Rebases to unsigned OCI image, sets marker, reboots |
 | 2 | `ucore-signed-autorebase.service` | Rebases to signed OCI image, sets marker, reboots |
-| 3 | `install-user-packages.service` | Installs packages (incl. `bcache-tools`) via `rpm-ostree`, sets marker, reboots |
-| N | `bcache-assemble.service` | Runs at **every** boot — assembles the bcache set (first boot *after* boot 3 does the one-time format) |
-| N | `var-mnt-cached\x2dstorage.mount` | Runs at **every** boot — mounts the bcache XFS volume (`nofail`; never blocks boot) |
+| 3 | `install-user-packages.service` | Installs packages via `rpm-ostree`, sets marker, reboots |
 | N | `wol-enable.service` | Runs at **every** boot — enables Wake-on-LAN |
 
 ### Why this ordering matters
@@ -63,7 +40,7 @@ The chain uses marker files (`/etc/ucore-autorebase/unverified`, `/etc/ucore-aut
 
 **Critical:** `install-user-packages.service` depends on `ConditionPathExists=/etc/ucore-autorebase/signed`. Without this, it could race with the signed rebase on boot 2 — both units would try to `rpm-ostree` and reboot simultaneously.
 
-Once a unit has run, it disables itself (`systemctl disable ...` or a done marker), so it never fires again. The exceptions are the every-boot units: `bcache-assemble.service` (reassembles bcache), `var-mnt-cached\x2dstorage.mount` (mounts the volume), and `wol-enable.service` (enables Wake-on-LAN).
+Once a unit has run, it disables itself (`systemctl disable ...` or a done marker), so it never fires again. The exception is the every-boot unit `wol-enable.service` (enables Wake-on-LAN).
 
 ## File Structure
 
@@ -72,7 +49,6 @@ ignition-files/
 ├── butane.sh                     # Transpilation wrapper
 ├── README.md                     # This file
 ├── nevua-ketana.bu               # Per-machine butane config
-├── bcache-setup.sh               # Machine-specific: state-aware bcache engine (embedded via local:)
 ├── llama-server.container        # Machine-specific: podman quadlet (embedded via local:)
 ├── llama-server-config.ini       # Machine-specific: llama.cpp preset config (embedded via local:)
 └── llama-server-firewall.service # Machine-specific: firewalld rule for port 8001 (embedded via local:)
