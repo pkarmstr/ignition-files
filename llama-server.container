@@ -2,6 +2,14 @@
 Description=llama.cpp OpenAI-compatible server (CUDA)
 Wants=container-storage.service
 After=container-storage.service
+# The models live on the bcache volume: hold startup until it is mounted.
+# Requires= (not just After=) actually pulls the mount unit in, so the
+# server fails loudly instead of starting with an empty /models if the
+# volume is unavailable. The escaped unit name (var-mnt-cached\x2dstorage.mount)
+# is REQUIRED: a plain var-mnt-cached-storage.mount would reference a
+different, non-existent unit.
+Requires=var-mnt-cached\x2dstorage.mount
+After=var-mnt-cached\x2dstorage.mount
 
 [Container]
 Image=ghcr.io/ggml-org/llama.cpp:server-cuda13

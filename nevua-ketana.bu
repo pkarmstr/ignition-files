@@ -37,12 +37,17 @@ storage:
       contents:
         inline: nevua-ketana
 
-    # Machine-specific: bcache setup script (nevua-ketana)
-    # Wipes the 20TB HDD and 1TB NVMe, then assembles them into a bcache
-    # device: HDD as backing, NVMe as read cache (writearound policy: reads
-    # are cached on the NVMe, writes go straight to the HDD only).
+    # Machine-specific: bcache lifecycle engine (nevua-ketana)
+    # State-aware; runs on every boot via bcache-assemble.service:
+    #   1. ASSEMBLE — non-destructively re-registers the existing bcache
+    #      set (20TB HDD backing + 1TB NVMe writearound read cache: reads
+    #      are cached on the NVMe, writes go straight to the HDD only)
+    #   2. INIT — only if assembly fails AND /var/lib/bcache-setup.done is
+    #      absent: one-time destructive first-time format (wipefs +
+    #      make-bcache + mkfs.xfs), then writes the marker
     # All device references are by stable ID; kernel names are resolved at
-    # runtime only for size sanity-checks.
+    # runtime only for sysfs/size lookups. Mounting is handled by the
+    # native var-mnt-cached\x2dstorage.mount unit (FCOS has no /etc/fstab).
     - path: /usr/local/bin/bcache-setup.sh
       mode: 0755
       overwrite: true
@@ -164,32 +169,65 @@ systemd:
         [Install]
         WantedBy=multi-user.target
 
-    # --- Machine-specific: bcache setup (nevua-ketana) ---
-    # One-shot: wipes the 20TB HDD and 1TB NVMe and assembles them into a
-    # bcache device (NVMe as writearound read cache for the HDD), mounts the
-    # result at /var/mnt/cached-storage, then disables itself.
-    # Runs once install-user-packages has finished (needs bcache-tools).
+    # --- Machine-specific: bcache assembly (nevua-ketana) ---
+    # Runs on EVERY boot and never disables itself: it re-registers the
+    # bcache superblocks so the volume survives reboots (the old one-shot
+    # self-disabling unit left the volume un-assembled on every later
+    # boot). Strictly sequenced: After=install-user-packages.service (so
+    # bcache-tools is layered first) and Before=local-fs.target (the mount
+    # phase). The volume itself is mounted by the native
+    # var-mnt-cached\x2dstorage.mount unit below.
 
-    - name: bcache-setup.service
+    - name: bcache-assemble.service
       enabled: true
       contents: |
         [Unit]
-        Description=Wipe and set up bcache (20TB HDD + 1TB NVMe writearound read cache)
+        Description=Assemble bcache (20TB HDD backing + 1TB NVMe writearound read cache)
+        Documentation=file:///usr/local/bin/bcache-setup.sh
         ConditionPathExists=/var/lib/install-user-packages.done
-        ConditionPathExists=!/var/lib/bcache-setup.done
-        After=network-online.target
-        Wants=network-online.target
+        After=install-user-packages.service
+        Before=local-fs.target
 
         [Service]
         Type=oneshot
         RemainAfterExit=yes
         StandardOutput=journal+console
         ExecStart=/usr/local/bin/bcache-setup.sh
-        ExecStart=/usr/bin/touch /var/lib/bcache-setup.done
-        ExecStart=/usr/bin/systemctl disable bcache-setup.service
 
         [Install]
         WantedBy=multi-user.target
+
+    # --- Machine-specific: native mount unit (nevua-ketana) ---
+    # Replaces the old /etc/fstab entry (runtime fstab mutation is an
+    # anti-pattern on immutable FCOS). The unit name is the systemd
+    # escaped form of the mount point:
+    #   /var/mnt/cached-storage  ->  var-mnt-cached\x2dstorage
+    # (slashes become dashes; the literal dash in the directory name is
+    # encoded as \x2d; `systemd-escape --path` produces exactly this).
+    # nofail + x-systemd.device-timeout=1ms: never block boot waiting for
+    # the device to appear (e.g. during first-time provisioning, before
+    # the bcache set exists). Requires=/After= the assembly service so the
+    # mount only runs once the volume is (re)assembled; Before=llama-
+    # server.service holds the app back until the backing filesystem is up.
+
+    - name: var-mnt-cached\x2dstorage.mount
+      enabled: true
+      contents: |
+        [Unit]
+        Description=bcache XFS volume at /var/mnt/cached-storage
+        Documentation=file:///usr/local/bin/bcache-setup.sh
+        Requires=bcache-assemble.service
+        After=bcache-assemble.service
+        Before=llama-server.service
+
+        [Mount]
+        What=/dev/disk/by-uuid/7c1e6a42-9f3d-4b8e-a51c-2d0b8e4f6a37
+        Where=/var/mnt/cached-storage
+        Type=xfs
+        Options=nofail,x-systemd.device-timeout=1ms
+
+        [Install]
+        WantedBy=local-fs.target
 
     # --- Machine-specific: Wake-on-LAN (nevua-ketana) ---
     # Runs at every boot. Enables WoL on the network interface.
