@@ -7,16 +7,10 @@ After=container-storage.service
 Image=ghcr.io/ggml-org/llama.cpp:server-cuda13
 ContainerName=llama-server
 PublishPort=8001:8001/tcp
-Volume=/var/mnt/cached-storage/llama-models:/models:ro
-Volume=/etc/llama-server:/config:ro
+Volume=/var/mnt/storage:/models:z
+Volume=/etc/llama-server:/config:z
 Exec=--models-preset /config/llama-server-config.ini --port 8001 --tools all
-Environment=NVIDIA_VISIBLE_DEVICES=all
-AddDevice=/dev/nvidia0:/dev/nvidia0
-AddDevice=/dev/nvidia1:/dev/nvidia1
-AddDevice=/dev/nvidiactl:/dev/nvidiactl
-AddDevice=/dev/nvidia-uvm:/dev/nvidia-uvm
-AddDevice=/dev/nvidia-uvm-tools:/dev/nvidia-uvm-tools
-AddDevice=/dev/nvidia-modeset:/dev/nvidia-modeset
+AddDevice=nvidia.com/gpu=all
 
 # Restart goes in [Service], NOT [Container]: the podman 5.8 quadlet
 # generator rejects Restart= in [Container] (unit is not generated).
