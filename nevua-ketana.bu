@@ -22,10 +22,13 @@ storage:
       mode: 0755
 
   disks:
+    # NOTE: snake_case is required here. Butane's Disk struct uses `wipe_table`
+    # (base/v0_7/schema.go); the camelCase spelling is an unused key, gets
+    # dropped in translation, and trips butane --strict.
     - device: /dev/disk/by-id/wwn-0x5000039e58d0650e
-      wipeTable: true
+      wipe_table: true
     - device: /dev/disk/by-id/nvme-CT1000P510SSD8_2537E9CABC5C
-      wipeTable: true
+      wipe_table: true
 
   files:
     # Machine-specific: hostname (nevua-ketana)
@@ -47,6 +50,16 @@ storage:
           echo "Enabling Wake-on-LAN on $IFACE..."
           ethtool -s "$IFACE" wol g
           ethtool "$IFACE" | grep -i "wake-on"
+
+    # --- Machine-specific: storage provisioning script (nevua-ketana) ---
+    # /usr/local is a symlink to /var/usrlocal on CoreOS, so this path is
+    # writable and survives image upgrades/rebases. Only written here; it is
+    # executed once by setup-storage.service (see systemd.units below).
+    - path: /usr/local/bin/setup-storage.sh
+      mode: 0755
+      overwrite: true
+      contents:
+        local: setup_storage.sh
 
     # --- llama.cpp server: config file ---
     - path: /etc/llama-server/llama-server-config.ini
@@ -143,6 +156,36 @@ systemd:
         ExecStart=/usr/bin/touch /var/lib/install-user-packages.done
         ExecStart=/usr/bin/systemctl disable install-user-packages.service
         ExecStart=/usr/bin/systemctl reboot
+
+        [Install]
+        WantedBy=multi-user.target
+
+    # --- Machine-specific: LVM cached storage volume (nevua-ketana) ---
+    # Boot 4: builds vg_storage (20 TB HDD origin cached by the 1 TB NVMe) and
+    # formats it XFS. DESTRUCTIVE to both data disks - they are wiped by
+    # Ignition at boot 1 and left alone until this runs.
+    # Gated on install-user-packages' done marker because that unit disables
+    # itself on an earlier boot, so After= alone would not order us behind it
+    # (see "Why this ordering matters" in the README). On failure the marker
+    # is not written - a oneshot stops at the first failed ExecStart - so the
+    # whole thing retries on the next boot.
+
+    - name: setup-storage.service
+      enabled: true
+      contents: |
+        [Unit]
+        Description=Create the LVM cached storage volume (one-shot)
+        ConditionPathExists=/var/lib/install-user-packages.done
+        ConditionPathExists=!/var/lib/setup-storage.done
+        After=install-user-packages.service
+
+        [Service]
+        Type=oneshot
+        RemainAfterExit=yes
+        StandardOutput=journal+console
+        ExecStart=/usr/local/bin/setup-storage.sh
+        ExecStart=/usr/bin/touch /var/lib/setup-storage.done
+        ExecStart=/usr/bin/systemctl disable setup-storage.service
 
         [Install]
         WantedBy=multi-user.target

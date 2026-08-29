@@ -25,13 +25,14 @@ BUTANE_IMAGE=quay.io/coreos/butane:v0.30.0 ./butane.sh nevua-ketana.bu nevua-ket
 
 Ignition runs **once** at first boot. It handles all `storage:` operations (disk wiping, creating directories, writing files) before any systemd unit starts. After that, systemd takes over.
 
-The provisioning here is designed as a **3-boot chain** — each step reboots and triggers the next:
+The provisioning here is designed as a **3-reboot chain** — each step reboots and triggers the next — followed by a one-shot storage setup on the boot that follows:
 
 | Boot | Unit | What it does |
 |------|------|-------------|
 | 1 | `ucore-unsigned-autorebase.service` | Rebases to unsigned OCI image, sets marker, reboots |
 | 2 | `ucore-signed-autorebase.service` | Rebases to signed OCI image, sets marker, reboots |
 | 3 | `install-user-packages.service` | Installs packages via `rpm-ostree`, sets marker, reboots |
+| 4 | `setup-storage.service` | Runs `/usr/local/bin/setup-storage.sh` once: builds the LVM cache volume, formats XFS, sets marker, disables itself (no reboot) |
 | N | `wol-enable.service` | Runs at **every** boot — enables Wake-on-LAN |
 
 ### Why this ordering matters
@@ -51,7 +52,8 @@ ignition-files/
 ├── nevua-ketana.bu               # Per-machine butane config
 ├── llama-server.container        # Machine-specific: podman quadlet (embedded via local:)
 ├── llama-server-config.ini       # Machine-specific: llama.cpp preset config (embedded via local:)
-└── llama-server-firewall.service # Machine-specific: firewalld rule for port 8001 (embedded via local:)
+├── llama-server-firewall.service # Machine-specific: firewalld rule for port 8001 (embedded via local:)
+└── setup_storage.sh              # Machine-specific: LVM cache setup (embedded as /usr/local/bin/setup-storage.sh)
 ```
 
 Each `.bu` file is self-contained. Within each file, sections are tagged as **generic** or **machine-specific** via comments:
@@ -82,3 +84,7 @@ Butane has no `include` or inheritance mechanism. Any composability requires cus
 - Ignition is **not** a configuration management tool. It only runs once, at provisioning. After that the OS is immutable (ostree-based). Use `rpm-ostree`, `systemd`, or a proper config management tool for ongoing changes.
 - `local:` file references in butane are resolved at **transpilation time** (the file is embedded as base64 into the `.ign`). They are not fetched at boot.
 - `source:` (remote) references are fetched at **boot time** over HTTP/HTTPS.
+- Storage keys are **snake_case** (`wipe_table`, `size_mib`, `wipe_filesystem`), not
+ camelCase. A wrong spelling is only reported as an `unused key` warning and is
+ silently dropped from the `.ign` — which is why `butane.sh` always passes `--strict`.
+ Inspect the generated `.ign` when adding storage stanzas.
