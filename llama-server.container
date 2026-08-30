@@ -1,7 +1,13 @@
 [Unit]
 Description=llama.cpp OpenAI-compatible server (CUDA)
-Wants=container-storage.service
-After=container-storage.service
+# Wait for the cached storage volume. Without a real dependency podman happily
+# bind-mounts an empty /var/mnt/storage directory and the --models-preset (and
+# every model) silently disappears. RequiresMountsFor= pulls in the native
+# mount unit and orders after it:
+#   Requires=var-mnt-storage.mount + After=var-mnt-storage.mount
+# (the quadlet generator derives the same dependency from each Volume= host
+# path; naming it here keeps the intent visible and survives edits below).
+RequiresMountsFor=/var/mnt/storage
 
 [Container]
 Image=ghcr.io/ggml-org/llama.cpp:server-cuda13
@@ -22,8 +28,8 @@ Restart=always
 # Deliberately NO [Install] section: with [Install] the quadlet generator
 # auto-enables the unit on every boot, and `systemctl enable`/`disable`
 # do not work on generated units ("transient or generated").
-# Shipped disabled until models are restored to
-# /var/mnt/cached-storage/llama-models. To enable later:
+# Shipped disabled until the models are restored to the storage volume
+# (/var/mnt/storage on the host, /models in the container). To enable later:
 #   mkdir -p /etc/containers/systemd/llama-server.container.d
 #   printf '[Install]\nWantedBy=multi-user.target\n' \
 #     > /etc/containers/systemd/llama-server.container.d/enable.conf

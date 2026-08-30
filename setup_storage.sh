@@ -144,12 +144,16 @@ lvm lvs -a -o+cache_mode,chunk_size "$VG_NAME"
 # therefore the cache) at every boot, and the cache mode is stored in the LVM
 # metadata. Verify after a reboot with:  lvs -o lv_name,cache_mode,cache_size
 #
-# Mounting is out of scope here (it was in the bcache version too). On CoreOS
-# prefer a systemd mount unit over /etc/fstab, e.g.
-#   /etc/systemd/system/var-mnt-storage.mount
-# with What=/dev/vg_storage/lv_data, Type=xfs, and options like
-#   noatime,nofail,x-systemd.device-timeout=30s
-# so a missing SSD/cache can never block boot.
+# Mounting is not this script's job: the .bu ships a native systemd mount unit,
+#   /etc/systemd/system/var-mnt-storage.mount   (/var/mnt/storage, xfs, noatime,nofail)
+# enabled at multi-user.target and gated on this service's done marker
+# (/var/lib/setup-storage.done), so it is never attempted before the volume
+# exists. setup-storage.service starts it on the boot that creates the volume;
+# on every later boot it mounts by itself as soon as LVM activates the LV. By
+# hand (as root): systemctl start|stop var-mnt-storage.mount
+# Do NOT add x-systemd.* options there (device-timeout, mount-timeout, makefs):
+# they are fstab-only and systemd.mount(5) says they are ignored in Options=. What
+# keeps a missing/degraded cache device from blocking boot is nofail.
 #
 # Cache lifecycle:
 #   lvm lvchange --cachemode writeback vg_storage/lv_data   # switch mode (unmounted)

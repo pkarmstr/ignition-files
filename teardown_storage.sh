@@ -47,7 +47,12 @@ if [ "$ASSUME_YES" != "1" ]; then
     [ "$reply" = "WIPE" ] || { echo "Aborted."; exit 1; }
 fi
 
-# 1. Unmount anything living on the volume (also catches bind mounts / swap).
+# 1. Stop the mount unit first: it pulls its dependents (llama-server.service,
+#    via RequiresMountsFor=) down cleanly instead of leaving them holding the
+#    filesystem busy.
+systemctl stop var-mnt-storage.mount 2>/dev/null || true
+
+# Then unmount anything else living on the volume (bind mounts / swap included).
 echo "Unmounting filesystems on $VG_NAME..."
 if command -v findmnt >/dev/null; then
     while read -r tgt; do

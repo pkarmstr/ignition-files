@@ -169,6 +169,11 @@ systemd:
     # (see "Why this ordering matters" in the README). On failure the marker
     # is not written - a oneshot stops at the first failed ExecStart - so the
     # whole thing retries on the next boot.
+    # The mount-unit ExecStart gives us a mounted volume on the *same* boot
+    # that created it: var-mnt-storage.mount is pulled in by multi-user.target
+    # before this service runs, so its condition gate is evaluated (and fails,
+    # no marker yet) and the job is already done by the time the marker exists.
+    # Starting it again after the touch re-queues the job and mounts it.
 
     - name: setup-storage.service
       enabled: true
@@ -185,7 +190,56 @@ systemd:
         StandardOutput=journal+console
         ExecStart=/usr/local/bin/setup-storage.sh
         ExecStart=/usr/bin/touch /var/lib/setup-storage.done
+        ExecStart=/usr/bin/systemctl --no-block start var-mnt-storage.mount
         ExecStart=/usr/bin/systemctl disable setup-storage.service
+
+        [Install]
+        WantedBy=multi-user.target
+
+    # --- Machine-specific: mount the cached storage volume (nevua-ketana) ---
+    # Native systemd mount unit, not /etc/fstab: FCOS ships no fstab and
+    # mutating one at runtime is an anti-pattern on immutable images. The unit
+    # name must be the escaped mount point (slashes -> dashes, `systemd-escape
+    # --path`), i.e. /var/mnt/storage -> var-mnt-storage.mount. No \x2d here
+    # because the path itself contains no dashes.
+    # Gate: ConditionPathExists on setup-storage.service's done marker
+    # (/var/lib/setup-storage.done) is what
+    # keeps the mount from ever being attempted before the volume exists. A
+    # condition is evaluated when the job starts, so a pre-setup boot skips the
+    # unit in milliseconds instead of sitting in the 90s implicit device wait
+    # for /dev/vg_storage/lv_data. After the marker exists, the implicit
+    # Requires=/After= on dev-vg_storage-lv_data.device does the real waiting
+    # for LVM to activate (and activate the cache of) the LV.
+    # nofail has no effect on mount(8) itself (libmount swallows it, it never
+    # reaches the kernel) but it does have a systemd one: mount_is_nofail()
+    # drops the automatic Before=local-fs.target ordering, so a missing or
+    # degraded volume can never stall the local-fs phase. With no ordering
+    # against local-fs.target the unit belongs in the multi-user phase, which
+    # only Wants= it - a failed mount is a failed unit, not a hung boot.
+    # enabled: true requires the [Install] section (butane --strict warns if a
+    # unit is enabled without one), and it is genuinely needed: systemd >= v257
+    # no longer injects local-fs.target Wants=<mount>, so nothing would pull a
+    # mount unit in on its own.
+    # NOTE: x-systemd.device-timeout= / x-systemd.mount-timeout= are fstab-only
+    # and are explicitly ignored in a unit's Options= (systemd.mount(5)) - that
+    # is why they are absent below, whatever the old comment at the bottom of
+    # setup_storage.sh used to suggest.
+    # llama-server.container depends on this unit via RequiresMountsFor=, so the
+    # container cannot start against an unmounted (empty) /var/mnt/storage.
+
+    - name: var-mnt-storage.mount
+      enabled: true
+      contents: |
+        [Unit]
+        Description=Cached storage volume (vg_storage/lv_data) at /var/mnt/storage
+        Documentation=file:///usr/local/bin/setup-storage.sh
+        ConditionPathExists=/var/lib/setup-storage.done
+
+        [Mount]
+        What=/dev/vg_storage/lv_data
+        Where=/var/mnt/storage
+        Type=xfs
+        Options=noatime,nofail
 
         [Install]
         WantedBy=multi-user.target

@@ -32,7 +32,8 @@ The provisioning here is designed as a **3-reboot chain** — each step reboots 
 | 1 | `ucore-unsigned-autorebase.service` | Rebases to unsigned OCI image, sets marker, reboots |
 | 2 | `ucore-signed-autorebase.service` | Rebases to signed OCI image, sets marker, reboots |
 | 3 | `install-user-packages.service` | Installs packages via `rpm-ostree`, sets marker, reboots |
-| 4 | `setup-storage.service` | Runs `/usr/local/bin/setup-storage.sh` once: builds the LVM cache volume, formats XFS, sets marker, disables itself (no reboot) |
+| 4 | `setup-storage.service` | Runs `/usr/local/bin/setup-storage.sh` once: builds the LVM cache volume, formats XFS, sets marker, starts `var-mnt-storage.mount`, disables itself (no reboot) |
+| 4..N | `var-mnt-storage.mount` | Mounts `vg_storage/lv_data` (XFS) on `/var/mnt/storage`. Skipped until the marker above exists; on boot 4 it is started by `setup-storage.service` itself |
 | N | `wol-enable.service` | Runs at **every** boot — enables Wake-on-LAN |
 
 ### Why this ordering matters
@@ -42,6 +43,16 @@ The chain uses marker files (`/etc/ucore-autorebase/unverified`, `/etc/ucore-aut
 **Critical:** `install-user-packages.service` depends on `ConditionPathExists=/etc/ucore-autorebase/signed`. Without this, it could race with the signed rebase on boot 2 — both units would try to `rpm-ostree` and reboot simultaneously.
 
 Once a unit has run, it disables itself (`systemctl disable ...` or a done marker), so it never fires again. The exception is the every-boot unit `wol-enable.service` (enables Wake-on-LAN).
+
+### The storage mount
+
+FCOS has no `/etc/fstab` (and mutating one at runtime is an anti-pattern on an immutable image), so the data volume is mounted by a native systemd unit, `var-mnt-storage.mount`, declared in the `.bu`. Points worth knowing:
+
+- **The gate is `/var/lib/setup-storage.done`.** `ConditionPathExists=` on `setup-storage.service`'s done marker means the mount is simply skipped on the boots before the volume exists — conditions are checked when the job starts, so it skips in milliseconds instead of hanging on the ~90 s implicit wait for `/dev/vg_storage/lv_data`. Once the marker exists, waiting for LVM is the implicit `Requires=`/`After=` dependency on `dev-vg_storage-lv_data.device`'s job.
+- **Same-boot mount.** Because the gate fails early in boot 4, the unit is not retried by itself, so `setup-storage.service` ends with `ExecStart=/usr/bin/systemctl --no-block start var-mnt-storage.mount`. `--no-block` is mandatory: a blocking `systemctl start` from inside a oneshot can deadlock the transaction.
+- **`WantedBy=multi-user.target`, not `local-fs.target`,** together with `nofail` in `Options=`. `nofail` is swallowed by libmount (never reaches the kernel) but it drops systemd's automatic `Before=local-fs.target` ordering, so a missing or degraded volume can never stall the local-fs phase — `multi-user.target` only `Wants=` the mount, so a failed mount is a failed unit, not a hung boot. It also has to be `enabled` (with an `[Install]` section): systemd ≥ v257 no longer injects `local-fs.target Wants=<mount>`, so nothing pulls a mount unit in on its own.
+- **`x-systemd.*` options are fstab-only** (`x-systemd.device-timeout=`, `x-systemd.mount-timeout=`, `x-systemd.makefs`). `systemd.mount(5)` states they are ignored when written in a unit's `Options=`, which is why they are not used.
+- **`llama-server.container` depends on it** via `RequiresMountsFor=/var/mnt/storage`, so the container can no longer start against an empty mount point and lose its `--models-preset`.
 
 ## File Structure
 
@@ -71,7 +82,8 @@ Butane has no `include` or inheritance mechanism. Any composability requires cus
 2. Change `passwd.users[0].password_hash` and `ssh_authorized_keys`
 3. Update machine-specific sections in the `.bu`:
    - `storage.files` — hostname, WoL script interface
-   - `systemd.units` — WoL service
+   - `systemd.units` — WoL service, and the storage mount unit (`var-mnt-storage.mount`:
+     unit name, `What=`, `Where=` all change per box)
 4. Update the machine-specific helper files (embedded into the `.bu` via
    `local:` references), e.g. the llama-server quadlet, config, and firewall service.
 5. Remove any units/files that don't apply to the new machine.
