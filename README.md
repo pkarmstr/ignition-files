@@ -23,7 +23,9 @@ BUTANE_IMAGE=quay.io/coreos/butane:v0.30.0 ./butane.sh nevua-ketana.bu nevua-ket
 
 ## Boot Sequence
 
-Ignition runs **once** at first boot. It handles all `storage:` operations (disk wiping, creating directories, writing files) before any systemd unit starts. After that, systemd takes over.
+Ignition runs **once** at first boot. It handles all `storage:` operations (creating directories, writing files) before any systemd unit starts. After that, systemd takes over.
+
+Ignition deliberately does **no** disk wiping here. `wipe_table` only clears the partition table and the signatures at the very start and end of a disk, and splitting the job across two systems makes the failure mode confusing. `setup-storage.sh` wipes both data disks with `wipefs --all` as its first step, so wiping and building live in one readable, testable file.
 
 The provisioning here is designed as a **3-reboot chain** — each step reboots and triggers the next — followed by a one-shot storage setup on the boot that follows:
 
@@ -32,7 +34,7 @@ The provisioning here is designed as a **3-reboot chain** — each step reboots 
 | 1 | `ucore-unsigned-autorebase.service` | Rebases to unsigned OCI image, sets marker, reboots |
 | 2 | `ucore-signed-autorebase.service` | Rebases to signed OCI image, sets marker, reboots |
 | 3 | `install-user-packages.service` | Installs packages via `rpm-ostree`, sets marker, reboots |
-| 4 | `setup-storage.service` | Runs `/usr/local/bin/setup-storage.sh` once: builds the LVM cache volume, formats XFS, sets marker, starts `var-mnt-storage.mount`, disables itself (no reboot) |
+| 4 | `setup-storage.service` | Runs `/usr/local/bin/setup-storage.sh` once: wipes both data disks, builds the LVM cache volume, formats XFS, sets marker, starts `var-mnt-storage.mount`, disables itself (no reboot) |
 | 4..N | `var-mnt-storage.mount` | Mounts `vg_storage/lv_data` (XFS) on `/var/mnt/storage`. Skipped until the marker above exists; on boot 4 it is started by `setup-storage.service` itself |
 | N | `wol-enable.service` | Runs at **every** boot — enables Wake-on-LAN |
 
@@ -64,7 +66,8 @@ ignition-files/
 ├── llama-server.container        # Machine-specific: podman quadlet (embedded via local:)
 ├── llama-server-config.ini       # Machine-specific: llama.cpp preset config (embedded via local:)
 ├── llama-server-firewall.service # Machine-specific: firewalld rule for port 8001 (embedded via local:)
-└── setup_storage.sh              # Machine-specific: LVM cache setup (embedded as /usr/local/bin/setup-storage.sh)
+├── setup_storage.sh              # Machine-specific: wipes the 2 data disks, LVM cache setup (embedded as /usr/local/bin/setup-storage.sh)
+└── teardown_storage.sh           # Machine-specific: destroys the volume again (run by hand, not embedded)
 ```
 
 Each `.bu` file is self-contained. Within each file, sections are tagged as **generic** or **machine-specific** via comments:

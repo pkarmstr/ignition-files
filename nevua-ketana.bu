@@ -21,14 +21,9 @@ storage:
     - path: /var/mnt/storage
       mode: 0755
 
-  disks:
-    # NOTE: snake_case is required here. Butane's Disk struct uses `wipe_table`
-    # (base/v0_7/schema.go); the camelCase spelling is an unused key, gets
-    # dropped in translation, and trips butane --strict.
-    - device: /dev/disk/by-id/wwn-0x5000039e58d0650e
-      wipe_table: true
-    - device: /dev/disk/by-id/nvme-CT1000P510SSD8_2537E9CABC5C
-      wipe_table: true
+  # No `disks:` section: the two data disks are wiped by setup-storage.sh (step 1
+  # of the script), which also builds the volume. Keeping the wiping and the
+  # setup in one file means one place to read and one place to test.
 
   files:
     # Machine-specific: hostname (nevua-ketana)
@@ -162,8 +157,8 @@ systemd:
 
     # --- Machine-specific: LVM cached storage volume (nevua-ketana) ---
     # Boot 4: builds vg_storage (20 TB HDD origin cached by the 1 TB NVMe) and
-    # formats it XFS. DESTRUCTIVE to both data disks - they are wiped by
-    # Ignition at boot 1 and left alone until this runs.
+    # formats it XFS. DESTRUCTIVE to both data disks - the script wipes them
+    # (wipefs) as its first step, so it needs nothing from Ignition.
     # Gated on install-user-packages' done marker because that unit disables
     # itself on an earlier boot, so After= alone would not order us behind it
     # (see "Why this ordering matters" in the README). On failure the marker

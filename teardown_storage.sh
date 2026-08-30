@@ -121,5 +121,5 @@ lsblk -o NAME,SIZE,MODEL,FSTYPE,MOUNTPOINTS -d "${DEVICES[@]}" || true
 blkid "${DEVICES[@]}" || echo "  (blkid: clean — no signatures)"
 lvm pvs 2>/dev/null || true
 
-# To rebuild: run ./setup_storage.sh (it expects blank disks and does no
-# wipefs of its own), or reboot into Ignition for the full provisioning chain.
+# To rebuild: run ./setup_storage.sh — it wipes both disks itself, so it does not
+# matter whether this script ran first.
