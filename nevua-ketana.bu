@@ -221,6 +221,11 @@ systemd:
     # setup_storage.sh used to suggest.
     # llama-server.container depends on this unit via RequiresMountsFor=, so the
     # container cannot start against an unmounted (empty) /var/mnt/storage.
+    # No ownership here on purpose: who may write the volume is a property of
+    # the filesystem (its root inode), set once by setup-storage.sh. The 0755
+    # root:root directory below is only the *mount point* — it is hidden by the
+    # volume the moment the mount lands, and its mode says nothing about access
+    # to the data.
 
     - name: var-mnt-storage.mount
       enabled: true

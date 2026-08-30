@@ -56,6 +56,15 @@ CHUNK_SIZE="1024"              # KiB — see the derivation in the header
 CACHE_MAX_CHUNKS=1000000       # allocation/cache_pool_max_chunks, pinned on lvcreate
 MIXED_BS_CFG='devices { allow_mixed_block_sizes = 1 }'
 
+# Who may read and write the volume (step 10). It is the one user declared in
+# the butane `passwd:` section; uid/gid are looked up at run time, never
+# hardcoded (see step 10). Mode is left at mkfs' 0755, so the owner gets rwx
+# and everyone else r-x; for group-writable, add `chmod g+w` to step 10, and
+# for "keelan may write whatever anyone else owns here" use an ACL instead of
+# a second chown:  setfacl -m u:$STORAGE_UID:rwx "$MNT_POINT"
+STORAGE_OWNER="keelan"
+MNT_POINT="/var/mnt/storage"   # must match var-mnt-storage.mount's Where=
+
 [ "$EUID" -eq 0 ] || { echo "Please run as root (sudo)." >&2; exit 1; }
 
 for d in "$CACHE_DEV" "$BACKING_DEV"; do
@@ -132,11 +141,33 @@ fi
 echo "Formatting $DATA_DEV with XFS..."
 mkfs.xfs -f "$DATA_DEV"
 
-echo "Success! /dev/$VG_NAME/$DATA_LV is a ${CACHE_MODE}-cached XFS volume."
+# 10. Hand the fresh volume to its owner. The root directory's ownership is
+#     filesystem *content* — it lives in the XFS root inode, not in the mount —
+#     so writing it once here, while the volume is empty, is all it ever takes:
+#     every later mount shows the same owner and no unit has to run at boot.
+#     The alternative (ExecStartPost=/usr/bin/chown in var-mnt-storage.mount)
+#     would re-assert the owner on every boot, hiding any later chown, and it
+#     runs as fsadm_t, whose SELinux policy is not written for chowning foreign
+#     labels — silently ignored with a '-' prefix, a failed unit without one.
+#     setup-storage.service is unconfined_service_t, which may.
+#     uid/gid come from id(1) rather than a literal 1000: the uCore image ships
+#     its own default user, so the Ignition-created keelan is not guaranteed to
+#     be uid 1000, and a wrong number here is an unreadable volume root.
+STORAGE_GID=$(id -g "$STORAGE_OWNER")
+echo "Mounting $DATA_DEV on $MNT_POINT to give $STORAGE_OWNER ($STORAGE_UID:$STORAGE_GID) the volume root..."
+mkdir -p "$MNT_POINT"
+# Same options var-mnt-storage.mount will use, so nothing surprising is cached
+# from this first mount; it is unmounted again below and systemd remounts it.
+mount -o noatime "$DATA_DEV" "$MNT_POINT"
+chown "$STORAGE_UID:$STORAGE_GID" "$MNT_POINT"
+umount "$MNT_POINT"
+
+echo "Success! /dev/$VG_NAME/$DATA_LV is a ${CACHE_MODE}-cached XFS volume, owned by $STORAGE_OWNER."
 lvm lvs -a -o+cache_mode,chunk_size "$VG_NAME"
 
 # Nothing else is needed for persistence: lvm2 activates vg_storage (and with it
-# the cache) at every boot, and the cache mode lives in the LVM metadata. Verify
-# after a reboot with:  lvs -o lv_name,cache_mode,cache_size
+# the cache) at every boot, the cache mode lives in the LVM metadata, and the
+# volume root's ownership lives in the filesystem. Verify after a reboot with:
+#   lvs -o lv_name,cache_mode,cache_size        ls -ld /var/mnt/storage
 # Mounting is var-mnt-storage.mount's job — see "The storage mount" in README.md.
 # If the cache NVMe ever dies: vgreduce --removemissing --force $VG_NAME, then mount.
