@@ -47,7 +47,13 @@ one of the by-id paths below in ignition `storage.disks.device`.
 - **ATA firmware:** 0103
 - **WWN:** `0x5000039e58d0650e` (SCSI ID `35000039e58d0650e`)
 - **Interface:** SATA, on X870 chipset controller at PCI `15:00.0` (ata7/host6)
-- **Sectors:** 4096-byte physical (4Kn)
+- **Sectors:** 512-byte logical / 4096-byte physical (**512e**, not 4Kn — confirmed
+  2026-08-29 by `vgcreate`, which reported physical 4096 (HDD) vs 512 (NVMe)
+  while accepting both *logical* sizes; LVM makes a logical mismatch a hard
+  error, so both logical sizes must be 512). This is why `pvcreate`/`vgcreate`
+  on this disk pair print
+  `WARNING: Devices have inconsistent physical block sizes (4096 and 512)` —
+  harmless, and documented in `setup_storage.sh`.
 - by-id paths (all equivalent, pick one and be consistent):
   - `/dev/disk/by-id/ata-TOSHIBA_HDWR62AUZSVA_X5E2A00MFWXJ`
   - `/dev/disk/by-id/scsi-35000039e58d0650e`
@@ -171,7 +177,7 @@ enp14s0   (or MAC fc:9d:05:06:77:a0)
 ## Verifying later
 
 ```bash
-lsblk -o NAME,MODEL,SERIAL,WWN,TRAN
+lsblk -o NAME,MODEL,SERIAL,WWN,TRAN,LOG-SEC,PHY-SEC
 ls -l /dev/disk/by-id/
 nvme list
 sudo dmidecode -s baseboard-product-name   # PRO X870E-P WIFI (MS-7E70)

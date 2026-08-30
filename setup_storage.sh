@@ -12,6 +12,22 @@
 #   -> /dev/vg_storage/lv_data  (XFS) is the filesystem to mount
 #   (lvconvert also creates internal LVs lv_data_cvol / lv_data_corig — leave them alone)
 #
+# The two LVM warnings the first run of this script produced are both handled:
+#   1. "WARNING: Devices have inconsistent physical block sizes (4096 and 512)"
+#      Emitted by vgcreate (tools/toollib.c) because the 20 TB HDD reports a
+#      4096-byte *physical* block size while the NVMe reports 512. The logical
+#      block size of both is 512 (a *logical* mismatch is a hard error, and
+#      that is the case that would actually matter). An LVM cache needs pool
+#      and origin in the same VG, so the mismatch is inherent; LVM just aligns
+#      everything to the larger size. See the block-size pre-flight below:
+#      the script verifies the logical sizes itself and silences only the
+#      physical mismatch with devices/allow_mixed_block_sizes.
+#   2. "Chunk size 512.00 KiB is less than required minimal chunk size
+#      960.00 KiB ..." (fatal). LVM caps a pool at
+#      allocation/cache_pool_max_chunks (1000000), so a 900G pool needs
+#      >= 960K chunks and 512K is rejected. The chunk size is now derived from
+#      CACHE_SIZE instead of hardcoded (see the chunk-size pre-flight below).
+#
 
 set -eo pipefail
 
@@ -28,9 +44,20 @@ BACKING_DEV="/dev/disk/by-id/wwn-0x5000039e58d0650e"
 VG_NAME="vg_storage"
 DATA_LV="lv_data"
 CACHE_LV="lv_cache"
-CACHE_SIZE="900G"            # keep ~100 GiB of the NVMe free for pool metadata + headroom
+# The NVMe is 1,000 GB = 931.5 GiB of real LVM space, so 900G leaves ~31 GiB
+# free for the pool metadata LV plus headroom.
+CACHE_SIZE="900G"
 CACHE_MODE="writethrough"    # lvm2: writethrough | writeback | passthrough (no writearound)
-CHUNK_SIZE="512"             # KiB; 900G / 512K chunks ~= 56 MiB of cache metadata
+
+# allocation/cache_pool_max_chunks — recommended ceiling for cache target v1.9.
+# It is pinned on the lvcreate command line so the chunk-size calculation below
+# is guaranteed to match what lvcreate enforces.
+CACHE_MAX_CHUNKS=1000000
+
+# Cache chunk size in KiB; "" means "compute it". Any value set here is only a
+# preference: it is rounded up to a power of two and never accepted below the
+# minimum implied by CACHE_SIZE / CACHE_MAX_CHUNKS (for 900G: 1024).
+CHUNK_SIZE=""
 
 # Mount point created by the Ignition config (/var/mnt/storage). Not mounted by
 # this script — see the note at the bottom of the file.
@@ -50,9 +77,90 @@ for d in "$CACHE_DEV" "$BACKING_DEV"; do
   fi
 done
 
-# 0. Load the cache target. LVM/libdevmapper autoloads this on demand; the
-#    explicit modprobe mirrors the old `modprobe bcache` and fails loudly if
-#    the module was trimmed out of the image.
+# 0a. Block sizes. LVM puts PVs with different *logical* block sizes in one VG
+#     only if told to (otherwise hard error); a mismatch of the *physical* block
+#     sizes alone just produces the "inconsistent physical block sizes" warning.
+#     Our pair is exactly the warning case: Toshiba 20 TB = 4096 physical /
+#     512 logical (512e), Crucial NVMe = 512/512. Check the part that matters
+#     ourselves, then silence the warning with devices/allow_mixed_block_sizes
+#     on the two commands that inspect both disks.
+echo "Checking device block sizes..."
+MIXED_BS_CFG='devices { allow_mixed_block_sizes = 1 }'
+
+block_size() {   # <dev> <logical|physical>
+    local q
+    q="/sys/class/block/$(basename "$(readlink -f "$1")")/queue"
+    cat "$q/${2}_block_size" 2>/dev/null || true
+}
+
+lbs=( "$(block_size "$BACKING_DEV" logical)" "$(block_size "$CACHE_DEV" logical)" )
+pbs=( "$(block_size "$BACKING_DEV" physical)" "$(block_size "$CACHE_DEV" physical)" )
+
+if [ -z "${lbs[0]}" ] || [ -z "${lbs[1]}" ]; then
+    echo "  Warning: could not read block sizes from sysfs, skipping the check." >&2
+elif [ "${lbs[0]}" != "${lbs[1]}" ]; then
+    echo "Error: logical block sizes differ (${lbs[0]} vs ${lbs[1]} bytes) between" >&2
+    echo "       $BACKING_DEV and $CACHE_DEV." >&2
+    echo "       LVM cannot mix those in one VG, so an LVM cache is not possible" >&2
+    echo "       on this disk pair." >&2
+    exit 1
+elif [ "${pbs[0]}" != "${pbs[1]}" ]; then
+    echo "  Physical block sizes differ (${pbs[0]} bytes on the HDD, ${pbs[1]} on the NVMe)."
+    echo "  Expected and harmless — LVM aligns to the larger size; the matching"
+    echo "  warning is silenced with devices/allow_mixed_block_sizes."
+fi
+
+# 0b. Cache chunk size. dm-cache maps the pool in fixed power-of-two chunks and
+#     a pool may hold at most allocation/cache_pool_max_chunks of them, so the
+#     minimum usable chunk size grows with the pool: LVM computes it in
+#     cache_manip.c:update_cache_pool_params as ceil(pool_size / max_chunks)
+#     rounded up to a 32K multiple. For 900G that is 960K, hence the hard
+#     failure of the old hardcoded 512K (900G/512K = 1843200 chunks).
+#     900G -> 1 MiB = 921600 chunks (~17 MiB of pool metadata LV, ~8 bytes per
+#     chunk of kernel memory); 1 MiB is also a multiple of the HDD's 4096-byte
+#     physical sectors, which is what a 512e backing disk wants.
+to_kib() {   # 900G -> KiB; a unit suffix is required so a typo cannot silently
+             # turn a 900 GiB pool into 900 KiB
+    local s="${1^^}" n unit
+    n="${s//[!0-9]/}"; unit="${s//[0-9]/}"
+    case "$unit" in
+        K|KB) echo "$n" ;;
+        M|MB) echo $(( n * 1024 )) ;;
+        G|GB) echo $(( n * 1024 * 1024 )) ;;
+        T|TB) echo $(( n * 1024 * 1024 * 1024 )) ;;
+        *)    echo "Error: cannot parse the size '$1' (use a suffix, e.g. 900G)." >&2; exit 1 ;;
+    esac
+}
+
+if ! cache_kib=$(to_kib "$CACHE_SIZE") || [ "${cache_kib:-0}" -le 0 ]; then
+    echo "Error: CACHE_SIZE='$CACHE_SIZE' did not parse to a positive size." >&2
+    exit 1
+fi
+min_chunk=$(( ((cache_kib + CACHE_MAX_CHUNKS - 1) / CACHE_MAX_CHUNKS + 31) / 32 * 32 ))
+chunk=32
+while [ "$chunk" -lt "$min_chunk" ] || [ "$chunk" -lt "${CHUNK_SIZE:-0}" ]; do
+    chunk=$(( chunk * 2 ))
+done
+if [ "$chunk" != "${CHUNK_SIZE:-}" ]; then
+    echo "Cache chunk size: ${chunk}K (requested '${CHUNK_SIZE:-auto}', minimum for a ${CACHE_SIZE} pool at ${CACHE_MAX_CHUNKS} chunks is ${min_chunk}K)"
+fi
+CHUNK_SIZE="$chunk"
+echo "  ${CACHE_SIZE} cache = $(( cache_kib / CHUNK_SIZE )) x ${CHUNK_SIZE}K chunks (limit ${CACHE_MAX_CHUNKS})"
+
+# Fail here rather than halfway through the rebuild: the pool (plus its
+# metadata LV, ~15 bytes per chunk) has to fit on the cache SSD.
+cache_dev_kib=$(( $(cat "/sys/class/block/$(basename "$(readlink -f "$CACHE_DEV")")/size") / 2 ))
+meta_kib=$(( 4096 + cache_kib / CHUNK_SIZE * 15 / 1024 ))  # 4 MiB + ~15 B/chunk, in KiB
+margin_kib=$(( 1024 * 1024 ))                              # label area + rounding
+if [ $(( cache_kib + meta_kib )) -gt $(( cache_dev_kib - margin_kib )) ]; then
+    echo "Error: ${CACHE_SIZE} pool + ~$(( meta_kib / 1024 )) MiB of metadata does not fit on" >&2
+    echo "       $CACHE_DEV ($(( cache_dev_kib / 1024 / 1024 )) GiB available)." >&2
+    exit 1
+fi
+
+# 0c. Load the cache target. LVM/libdevmapper autoloads this on demand; the
+#     explicit modprobe mirrors the old `modprobe bcache` and fails loudly if
+#     the module was trimmed out of the image.
 echo "Loading dm-cache kernel module..."
 modprobe dm_cache
 
@@ -73,11 +181,11 @@ fi
 #    leftover signature it dislikes (e.g. the old bcache superblock). If you
 #    re-run this script by hand later, wipe the disks yourself first.
 echo "Creating physical volumes..."
-lvm pvcreate -y "$BACKING_DEV" "$CACHE_DEV"
+lvm pvcreate -y --config "$MIXED_BS_CFG" "$BACKING_DEV" "$CACHE_DEV"
 
 # 3. Volume group (LVM-only requirement: cache pool and origin must share a VG).
 echo "Creating volume group $VG_NAME..."
-lvm vgcreate "$VG_NAME" "$BACKING_DEV" "$CACHE_DEV"
+lvm vgcreate --config "$MIXED_BS_CFG" "$VG_NAME" "$BACKING_DEV" "$CACHE_DEV"
 
 # 4. Origin LV — all remaining space on the HDD PV (replaces make-bcache -B).
 echo "Creating $VG_NAME/$DATA_LV on the backing HDD..."
@@ -89,6 +197,7 @@ lvm lvcreate -n "$CACHE_LV" -L "$CACHE_SIZE" --type cache-pool \
     --cachemode "$CACHE_MODE" \
     --poolmetadataspare n \
     --chunksize "$CHUNK_SIZE" \
+    --config "allocation { cache_pool_max_chunks = $CACHE_MAX_CHUNKS }" \
     "$VG_NAME" "$CACHE_DEV"
 
 # 6. Attach the pool to the origin (replaces the cache-set linking done by
@@ -117,7 +226,7 @@ echo "Formatting /dev/$VG_NAME/$DATA_LV with XFS..."
 mkfs.xfs -f "/dev/mapper/${VG_NAME}-${DATA_LV}"
 
 echo "Success! /dev/$VG_NAME/$DATA_LV is a ${CACHE_MODE}-cached XFS volume."
-lvm lvs -a "$VG_NAME"
+lvm lvs -a -o+cache_mode,chunk_size "$VG_NAME"
 
 # Nothing else is required for persistence: lvm2 activates vg_storage (and
 # therefore the cache) at every boot, and the cache mode is stored in the LVM
