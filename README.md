@@ -55,6 +55,7 @@ FCOS has no `/etc/fstab` (and mutating one at runtime is an anti-pattern on an i
 - **`WantedBy=multi-user.target`, not `local-fs.target`,** together with `nofail` in `Options=`. `nofail` is swallowed by libmount (never reaches the kernel) but it drops systemd's automatic `Before=local-fs.target` ordering, so a missing or degraded volume can never stall the local-fs phase — `multi-user.target` only `Wants=` the mount, so a failed mount is a failed unit, not a hung boot. It also has to be `enabled` (with an `[Install]` section): systemd ≥ v257 no longer injects `local-fs.target Wants=<mount>`, so nothing pulls a mount unit in on its own.
 - **`x-systemd.*` options are fstab-only** (`x-systemd.device-timeout=`, `x-systemd.mount-timeout=`, `x-systemd.makefs`). `systemd.mount(5)` states they are ignored when written in a unit's `Options=`, which is why they are not used.
 - **`llama-server.container` depends on it** via `RequiresMountsFor=/var/mnt/storage`, so the container can no longer start against an empty mount point and lose its `--models-preset`.
+- **The volume root's owner *and* SELinux label are written once by `setup-storage.sh`**, not by the mount unit. Both are filesystem content (the XFS root inode), so writing them while the volume is empty and mounted is enough forever; `ls -ldZ /var/mnt/storage` shows them after any reboot. The label matters as much as the owner: `mkfs.xfs` stores no `security.selinux` xattr, so a freshly formatted root mounts as `unlabeled_t` instead of inheriting the mount point's `mnt_t`, and everything created under it inherits `unlabeled_t` too. From `keelan` that is invisible — `unconfined_t` is allowed `unlabeled_t` — but a confined domain (the container) is denied it, so the step `restorecon`s it. The mode stays `mkfs`' 0755: owner `rwx`, everyone else `r-x`.
 
 ## File Structure
 
@@ -62,12 +63,14 @@ FCOS has no `/etc/fstab` (and mutating one at runtime is an anti-pattern on an i
 ignition-files/
 ├── butane.sh                     # Transpilation wrapper
 ├── README.md                     # This file
+├── AGENTS.md                     # Rules for AI agents working in this repo
+├── HARDWARE.md                   # Hardware + stable drive identifiers (nevua-ketana)
 ├── nevua-ketana.bu               # Per-machine butane config
 ├── llama-server.container        # Machine-specific: podman quadlet (embedded via local:)
 ├── llama-server-config.ini       # Machine-specific: llama.cpp preset config (embedded via local:)
 ├── llama-server-firewall.service # Machine-specific: firewalld rule for port 8001 (embedded via local:)
-├── setup_storage.sh              # Machine-specific: wipes the 2 data disks, LVM cache setup (embedded as /usr/local/bin/setup-storage.sh)
-└── teardown_storage.sh           # Machine-specific: destroys the volume again (run by hand, not embedded)
+├── setup-storage.sh              # Machine-specific: wipes the 2 data disks, LVM cache setup (embedded verbatim as /usr/local/bin/setup-storage.sh)
+└── teardown-storage.sh           # Machine-specific: destroys the volume again (run by hand, not embedded)
 ```
 
 Each `.bu` file is self-contained. Within each file, sections are tagged as **generic** or **machine-specific** via comments:
@@ -102,4 +105,4 @@ Butane has no `include` or inheritance mechanism. Any composability requires cus
 - Storage keys are **snake_case** (`wipe_table`, `size_mib`, `wipe_filesystem`), not
  camelCase. A wrong spelling is only reported as an `unused key` warning and is
  silently dropped from the `.ign` — which is why `butane.sh` always passes `--strict`.
- Inspect the generated `.ign` when adding storage stanzas.
+ (This is Butane's YAML schema only; file and unit names in this repo are kebab-case.)

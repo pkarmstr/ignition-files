@@ -53,7 +53,7 @@ one of the by-id paths below in ignition `storage.disks.device`.
   error, so both logical sizes must be 512). This is why `pvcreate`/`vgcreate`
   on this disk pair print
   `WARNING: Devices have inconsistent physical block sizes (4096 and 512)` —
-  harmless, and documented in `setup_storage.sh`.
+  harmless, and documented in `setup-storage.sh`.
 - by-id paths (all equivalent, pick one and be consistent):
   - `/dev/disk/by-id/ata-TOSHIBA_HDWR62AUZSVA_X5E2A00MFWXJ`
   - `/dev/disk/by-id/scsi-35000039e58d0650e`

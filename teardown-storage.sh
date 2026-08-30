@@ -1,6 +1,6 @@
 #!/bin/bash
 #
-# teardown_storage.sh — undo setup_storage.sh on nevua-ketana.
+# teardown-storage.sh — undo setup-storage.sh on nevua-ketana.
 #
 # Unmounts the cached volume, removes vg_storage (lv_data + lv_cache pool and
 # their internal cvol/corig LVs), clears the PV labels, and zeroes the first
@@ -9,14 +9,14 @@
 #
 # WARNING: destructive and irreversible.
 #
-# Usage:  sudo ./teardown_storage.sh          # prompts for confirmation
-#         sudo ./teardown_storage.sh --yes    # no prompt (scripted use)
+# Usage:  sudo ./teardown-storage.sh          # prompts for confirmation
+#         sudo ./teardown-storage.sh --yes    # no prompt (scripted use)
 
 set -eo pipefail
 
 VG_NAME="vg_storage"
 
-# Same device paths as setup_storage.sh — HDD + the 1 TB cache NVMe only.
+# Same device paths as setup-storage.sh — HDD + the 1 TB cache NVMe only.
 DEVICES=(
     "/dev/disk/by-id/wwn-0x5000039e58d0650e"            # Toshiba 20 TB HDD
     "/dev/disk/by-id/nvme-CT1000P510SSD8_2537E9CABC5C"  # Crucial P5 Plus 1 TB
@@ -121,5 +121,5 @@ lsblk -o NAME,SIZE,MODEL,FSTYPE,MOUNTPOINTS -d "${DEVICES[@]}" || true
 blkid "${DEVICES[@]}" || echo "  (blkid: clean — no signatures)"
 lvm pvs 2>/dev/null || true
 
-# To rebuild: run ./setup_storage.sh — it wipes both disks itself, so it does not
+# To rebuild: run ./setup-storage.sh — it wipes both disks itself, so it does not
 # matter whether this script ran first.

@@ -11,7 +11,7 @@
 # DESTROYS EVERYTHING ON THE TWO DATA DISKS. This is an installer step, run once
 # by setup-storage.service, and it does not care what it finds on them: it wipes
 # both disks itself before building. The one thing it refuses to touch is the OS
-# disk (OS_DEV). ./teardown_storage.sh undoes the result on a running system.
+# disk (OS_DEV). ./teardown-storage.sh undoes the result on a running system.
 #
 # Written for ONE machine, so nothing is probed at runtime; every size below is a
 # measured value. Device identifiers: HARDWARE.md. If a disk is ever swapped,
@@ -39,7 +39,11 @@
 #     Re-check after a disk swap:  lsblk -dno NAME,LOG-SEC,PHY-SEC /dev/sdX
 #
 
-set -eo pipefail
+# -u as well as -e: every variable below has to actually be set. A misspelled
+# or missing assignment here expands to nothing and quietly changes the meaning
+# of a chown (":1001" is "set the group", not "set the owner"), so an empty
+# value has to be an error, not an argument to a successful-looking command.
+set -euo pipefail
 
 CACHE_DEV="/dev/disk/by-id/nvme-CT1000P510SSD8_2537E9CABC5C"    # Crucial P5 Plus 1 TB
 BACKING_DEV="/dev/disk/by-id/wwn-0x5000039e58d0650e"            # Toshiba 20 TB HDD
@@ -153,6 +157,7 @@ mkfs.xfs -f "$DATA_DEV"
 #     uid/gid come from id(1) rather than a literal 1000: the uCore image ships
 #     its own default user, so the Ignition-created keelan is not guaranteed to
 #     be uid 1000, and a wrong number here is an unreadable volume root.
+STORAGE_UID=$(id -u "$STORAGE_OWNER")
 STORAGE_GID=$(id -g "$STORAGE_OWNER")
 echo "Mounting $DATA_DEV on $MNT_POINT to give $STORAGE_OWNER ($STORAGE_UID:$STORAGE_GID) the volume root..."
 mkdir -p "$MNT_POINT"
@@ -160,6 +165,32 @@ mkdir -p "$MNT_POINT"
 # from this first mount; it is unmounted again below and systemd remounts it.
 mount -o noatime "$DATA_DEV" "$MNT_POINT"
 chown "$STORAGE_UID:$STORAGE_GID" "$MNT_POINT"
+
+# ...and label it. mkfs.xfs writes no security.selinux xattr, so on the first
+# mount the root inode has no label of its own and lands on unlabeled_t rather
+# than inheriting the mount point's mnt_t — and everything created under it
+# inherits unlabeled_t too. It is invisible from this account: unconfined_t
+# (keelan, ssh, sudo) is allowed unlabeled_t, so the volume reads and writes
+# fine. A confined domain is not — llama-server.container bind-mounts this
+# volume as /models, and it would be denied on every file there, with an AVC
+# naming a label nobody set on purpose. restorecon applies the policy default
+# (/var/mnt -> mnt_t via file_contexts.subs_dist); -F because the current label
+# is not a *wrong* default, it is the absence of one. The result is an on-disk
+# xattr, so like the ownership it is written once here and every later mount
+# shows it. Deliberately not -R: this only ever runs against an empty volume,
+# and a recursive relabel would undo the container runtime's own :z relabel.
+restorecon -F "$MNT_POINT"
+
+# Verify rather than assume. Ownership and label both live in the filesystem,
+# so if either write silently no-oped here the volume is unusable forever and
+# nothing downstream reports it: an 18 TiB "Success!" that no one can write to.
+VOL_UID=$(stat -c "%u" "$MNT_POINT")
+VOL_CTX=$(stat -c "%C" "$MNT_POINT")
+if [ "$VOL_UID" != "$STORAGE_UID" ] || [[ "$VOL_CTX" == *unlabeled_t* ]]; then
+    echo "Error: $MNT_POINT is not usable: got uid=$VOL_UID context=$VOL_CTX," >&2
+    echo "       expected uid=$STORAGE_UID and a real label." >&2
+    exit 1
+fi
 umount "$MNT_POINT"
 
 echo "Success! /dev/$VG_NAME/$DATA_LV is a ${CACHE_MODE}-cached XFS volume, owned by $STORAGE_OWNER."
@@ -167,7 +198,10 @@ lvm lvs -a -o+cache_mode,chunk_size "$VG_NAME"
 
 # Nothing else is needed for persistence: lvm2 activates vg_storage (and with it
 # the cache) at every boot, the cache mode lives in the LVM metadata, and the
-# volume root's ownership lives in the filesystem. Verify after a reboot with:
-#   lvs -o lv_name,cache_mode,cache_size        ls -ld /var/mnt/storage
+# volume root's ownership and SELinux label live in the filesystem. Verify
+# after a reboot with:
+#   lvs -o lv_name,cache_mode,cache_size       ls -ldZ /var/mnt/storage
+# and, from the account, the thing that actually matters:
+#   touch /var/mnt/storage/writetest && rm /var/mnt/storage/writetest
 # Mounting is var-mnt-storage.mount's job — see "The storage mount" in README.md.
 # If the cache NVMe ever dies: vgreduce --removemissing --force $VG_NAME, then mount.

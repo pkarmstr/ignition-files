@@ -54,7 +54,7 @@ storage:
       mode: 0755
       overwrite: true
       contents:
-        local: setup_storage.sh
+        local: setup-storage.sh
 
     # --- llama.cpp server: config file ---
     - path: /etc/llama-server/llama-server-config.ini
@@ -216,9 +216,8 @@ systemd:
     # no longer injects local-fs.target Wants=<mount>, so nothing would pull a
     # mount unit in on its own.
     # NOTE: x-systemd.device-timeout= / x-systemd.mount-timeout= are fstab-only
-    # and are explicitly ignored in a unit's Options= (systemd.mount(5)) - that
-    # is why they are absent below, whatever the old comment at the bottom of
-    # setup_storage.sh used to suggest.
+    # and are explicitly ignored in a unit's Options= (systemd.mount(5)), so they
+    # are absent below.
     # llama-server.container depends on this unit via RequiresMountsFor=, so the
     # container cannot start against an unmounted (empty) /var/mnt/storage.
     # No ownership here on purpose: who may write the volume is a property of
