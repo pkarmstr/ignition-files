@@ -14,9 +14,10 @@
 #   python3 -m http.server 33334 \
 #     --directory /mnt/storage/nevua-ketana-backup/20tb-hdd/llama-models
 #
-# Only the model this machine actually serves is fetched here — one GGUF plus
-# its chat template, ~30 GB. The whole tree is several TB (~6 h on the wire);
-# when that restore happens it is the same directory mapping, one rsync:
+# Only the model this machine actually serves is fetched here — one GGUF, its
+# chat template and the router's preset INI, ~30 GB. The whole tree is several
+# TB (~6 h on the wire); when that restore happens it is the same directory
+# mapping, one rsync:
 #
 #   rsync -aHAXx --info=progress2 \
 #     /mnt/storage/nevua-ketana-backup/20tb-hdd/llama-models/ \
@@ -39,8 +40,11 @@ DEST_ROOT="$MNT_POINT/llama-models"   # bind-mounted as /models in llama-server.
 OWNER="keelan"
 
 # "<expected bytes> <path relative to the served directory>"
-# Every path below is also <path> under /models in llama-server-config.ini.
+# The model paths inside llama-server-config.ini are these same paths with
+# /models in front, and the INI is itself fetched into the tree: that directory
+# is the whole input to the server, which is why nothing is seeded into /etc.
 FILES=(
+  "711 llama-server-config.ini"
   "31457991680 Qwen3.8-27B-GGUF/Qwen3.8-27B-UD-Q8_K_XL.gguf"
   "27167 Qwen-Fixed-Chat-Templates/chat_template.jinja"
 )
@@ -67,6 +71,12 @@ if ! mountpoint -q "$MNT_POINT"; then
     echo "Error: $MNT_POINT was not mounted within 5 minutes." >&2
     exit 1
 fi
+
+# The tree itself, not only its contents: llama-server-config.ini lives at its
+# root and $OWNER edits that file without sudo, so the directory has to belong to
+# $OWNER as well. install -d inside the loop chowns only the directory it is
+# given, and the parents it creates on the way there land as root.
+install -d -o "$OWNER_UID" -g "$OWNER_GID" "$DEST_ROOT"
 
 for entry in "${FILES[@]}"; do
     read -r want_bytes rel_path <<< "$entry"

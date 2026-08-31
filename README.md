@@ -73,7 +73,7 @@ The provisioning here is designed as a **3-reboot chain** — each step reboots 
 | 3 | `install-user-packages.service` | Installs packages via `rpm-ostree`, sets marker, reboots |
 | 4 | `setup-storage.service` | Runs `/usr/local/bin/setup-storage.sh` once: wipes both data disks, builds the LVM cache volume, formats XFS, sets marker, starts `var-mnt-storage.mount`, disables itself (no reboot) |
 | 4..N | `var-mnt-storage.mount` | Mounts `vg_storage/lv_data` (XFS) on `/var/mnt/storage`. Skipped until the marker above exists; on boot 4 it is started by `setup-storage.service` itself |
-| 4 (later) | `fetch-models.service` | Waits for that mount, fetches the model + chat template from erevrav into `/var/mnt/storage/llama-models`, sets its marker, starts `llama-server.service`, disables itself (no reboot) |
+| 4 (later) | `fetch-models.service` | Waits for that mount, fetches the model, chat template and preset INI from erevrav into `/var/mnt/storage/llama-models`, sets its marker, starts `llama-server.service`, disables itself (no reboot) |
 | 4..N | `llama-server.service` | The quadlet (`llama-server.container`), enabled at every boot but **gated** on `/var/lib/fetch-models.done` — skipped, never failed, until the model exists. Pulls the `server-cuda13` tag on every start (0.6 s unchanged, 3.32 GB changed) |
 | N | `wol-enable.service` | Runs at **every** boot — enables Wake-on-LAN |
 
@@ -100,8 +100,9 @@ FCOS has no `/etc/fstab` (and mutating one at runtime is an anti-pattern on an i
 ### The model fetch
 
 Ignition cannot carry a 30 GB model, and the whole model library is several TB,
-so a fresh machine takes one model — the one in `FILES` in `fetch-models.sh` —
-and the llama.cpp server starts against it. Notes on how that is wired:
+so a fresh machine takes the files listed in `FILES` in `fetch-models.sh` — one
+model, its chat template, and the router's preset INI — and the llama.cpp server
+starts against them. Notes on how that is wired:
 
 - **Two servers, two ports.** The `.ign` server (33333) only has to outlive the
   install; the model server (33334) has to be up for boot 4. `python3 -m
@@ -119,23 +120,23 @@ and the llama.cpp server starts against it. Notes on how that is wired:
   `fetch-models.service` ends with `systemctl --no-block start llama-server.service`.
 - **Layout.** `/var/mnt/storage/llama-models` is bind-mounted as `/models` — the
   models sit directly under `/models`, no extra `llama-models` layer in the
-  container — and that directory mirrors the served directory (the old box's
-  `llama-models`) one for one. So the paths in `llama-server-config.ini` (under
-  `/models`), in `fetch-models.sh` (under `DEST_ROOT`) and on disk are the same
-  paths. A later full restore is an `rsync` of that one directory — no renaming,
-  no re-linking.
+  container, and so does `llama-server-config.ini`, which is the file the server
+  reads as its `--models-preset` — and that directory mirrors the served
+  directory (the old box's `llama-models`) one for one. So the paths in
+  `llama-server-config.ini` (under `/models`), in `fetch-models.sh` (under
+  `DEST_ROOT`) and on disk are the same paths. A later full restore is an `rsync`
+  of that one directory — no renaming, no re-linking, config included.
 
 ## The llama.cpp server
 
 One container is the whole server: the rootful quadlet
 `/etc/containers/systemd/llama-server.container`, writing the unit
-`llama-server.service`, with its config bind-mounted from
-`/etc/llama-server/llama-server-config.ini` to `/config` and the model tree from
-`/var/mnt/storage/llama-models` to `/models`.
+`llama-server.service`, with exactly one bind: the model tree
+`/var/mnt/storage/llama-models` → `/models`, which also carries the preset INI.
 
 ### Router mode
 
-`--models-preset /config/llama-server-config.ini` runs llama.cpp in **router
+`--models-preset /models/llama-server-config.ini` runs llama.cpp in **router
 mode**: each INI section is a model ID, and the router spawns a child
 `llama-server` instance for the one a client asks for, then loads and unloads
 them on demand.
@@ -152,6 +153,39 @@ them on demand.
 - **A loaded model stays loaded.** There is deliberately no `--sleep-idle-seconds`: nothing unloads on a timer, so a model holds its memory until you `POST /models/unload` it or the container restarts. The consequence of pairing that with `--models-max 1` is that the single slot is always occupied — to serve a second model, unload the first one.
 - **Nothing is preloaded.** The log says `starting server in router mode. models will be automatically loaded on-demand`, and a model appears only when a client asks for it (or you `POST /models/load`). `unloaded` in `/v1/models` on a freshly started server is normal, not broken.
 - **The health check is liveness only** — `curl -fsS http://127.0.0.1:8001/health` every 30 s, 60 s start period, and deliberately **no** `HealthOnFailure`: an HTTP check must not be able to kill a session. `curl` is in the image, `wget` is not.
+
+### Changing the model config
+
+`llama-server-config.ini` is part of the model tree, not of the OS. Nothing in
+`/etc` points at it, and the box's copy is owned by `keelan`, so editing it needs
+no sudo. Three copies exist and each has a job:
+
+| Copy | Role |
+|---|---|
+| the served directory on erevrav | what a fresh install fetches — an entry in `FILES`, byte-size checked like every other file |
+| this repo | the copy git keeps, so a preset change is reviewable |
+| `/var/mnt/storage/llama-models/` on the box | what the server actually reads |
+
+An edit therefore has three destinations and one restart:
+
+```bash
+vi llama-server-config.ini                                                      # git records it
+scp llama-server-config.ini keelan@192.168.0.45:/var/mnt/storage/llama-models/  # the live box (no sudo)
+cp llama-server-config.ini /mnt/storage/nevua-ketana-backup/20tb-hdd/llama-models/  # future installs
+ssh keelan@192.168.0.45 'sudo systemctl restart llama-server.service'           # apply
+```
+
+A config change needs a **restart only**: no `daemon-reload` (that is for quadlet
+edits, where the generator has to re-run) and no `.ign` rebuild (that only
+matters on a reinstall). The router reads the presets once per process start —
+watch for `Loaded N custom model presets from /models/llama-server-config.ini` —
+and the restart recreates the container, so the resident model goes with it and
+returns on the next request. `fetch-models.sh` is not a sync mechanism: it runs
+once per provisioning and its marker keeps it that way.
+
+(The served directory also still holds `config.ini`, the *old* machine's preset
+file with `/mnt/20tb-hdd/...` paths. It is fetched by nothing and read by nobody;
+reconciling the two files is open work.)
 
 ### Pull on boot
 
@@ -227,7 +261,7 @@ ignition-files/
 ├── HARDWARE.md                   # Hardware + stable drive identifiers (nevua-ketana)
 ├── nevua-ketana.bu               # Per-machine butane config
 ├── llama-server.container        # Machine-specific: podman quadlet — pull-on-boot llama.cpp router (embedded via local:)
-├── llama-server-config.ini       # Machine-specific: llama.cpp preset config (embedded via local:)
+├── llama-server-config.ini       # llama.cpp router preset INI — fetched into the model tree by fetch-models.sh; the repo copy is the record, not an input
 ├── llama-server-firewall.service # Machine-specific: firewalld rule for port 8001 (embedded via local:)
 ├── fetch-models.sh               # Machine-specific: pulls the model files from erevrav onto the volume (embedded verbatim as /usr/local/bin/fetch-models.sh)
 ├── setup-storage.sh              # Machine-specific: wipes the 2 data disks, LVM cache setup (embedded verbatim as /usr/local/bin/setup-storage.sh)
@@ -252,8 +286,11 @@ Butane has no `include` or inheritance mechanism. Any composability requires cus
    - `systemd.units` — WoL service, and the storage mount unit (`var-mnt-storage.mount`:
      unit name, `What=`, `Where=` all change per box)
 4. Update the machine-specific helper files (embedded into the `.bu` via
-   `local:` references), e.g. the llama-server quadlet, config, and firewall
-   service, and `fetch-models.sh` (its `BASE_URL` port, `DEST_ROOT` and `FILES`).
+   `local:` references), e.g. the llama-server quadlet and the firewall service,
+   and `fetch-models.sh` (its `BASE_URL` port, `DEST_ROOT` and `FILES`). Models
+   and the preset INI are *not* embedded — they arrive over the model server, so
+   a new box's model set is a `FILES` edit plus a `llama-server-config.ini`
+   edit, never an Ignition edit.
 5. Remove any units/files that don't apply to the new machine.
 6. Transpile: `./butane.sh new-machine.bu new-machine.ign`
 

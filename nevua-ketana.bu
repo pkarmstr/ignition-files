@@ -16,8 +16,6 @@ storage:
   directories:
     - path: /etc/ucore-autorebase
       mode: 0755
-    - path: /etc/llama-server
-      mode: 0755
     - path: /var/mnt/storage
       mode: 0755
 
@@ -63,14 +61,10 @@ storage:
       contents:
         local: fetch-models.sh
 
-    # --- llama.cpp server: config file ---
-    - path: /etc/llama-server/llama-server-config.ini
-      mode: 0644
-      overwrite: true
-      contents:
-        local: llama-server-config.ini
-
     # --- llama.cpp server: Podman quadlet ---
+    # The router's --models-preset INI is deliberately not seeded here: it lives
+    # in the model tree and arrives with fetch-models.sh, so nothing under /etc
+    # has to point at a volume that does not exist yet on the first boot.
     # Pull-on-boot: the quadlet carries Pull=always, so every start re-resolves
     # the server-cuda13 tag and the box runs the newest llama.cpp build.
     - path: /etc/containers/systemd/llama-server.container

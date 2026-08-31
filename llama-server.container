@@ -36,15 +36,18 @@ ContainerName=llama-server
 # with only a journal line as evidence.
 Pull=always
 PublishPort=8001:8001/tcp
-# The model tree is the bind source, not the whole volume: /models then holds
-# the models directly (/models/Qwen3.8-27B-GGUF/...) instead of nesting a
-# llama-models layer inside it. The directory is created by fetch-models.sh
-# before this unit may start (see the condition above).
+# The model tree is the only bind: /models holds the models directly
+# (/models/Qwen3.8-27B-GGUF/...) instead of nesting a llama-models layer inside
+# it, and it holds the preset INI too — one directory is everything this server
+# reads. Both are written by fetch-models.sh before this unit may start (see the
+# condition above).
 Volume=/var/mnt/storage/llama-models:/models:z
-Volume=/etc/llama-server:/config:z
 # --models-preset is a ROUTER-mode flag: the INI's sections are the model IDs
 # clients ask for and the router loads/unloads child instances on demand
-# (GET /models, POST /models/load, POST /models/unload).
+# (GET /models, POST /models/load, POST /models/unload). The file lives in the
+# model tree rather than /etc because it is nothing but per-model settings that
+# name /models paths: it is fetched with the models, edited without sudo, and it
+# lands with the same rsync as the models it describes.
 # --models-max 1: the default is 4 simultaneous instances, which with a 29 GB
 #   model on 2x24 GB GPUs is a guaranteed thrash/OOM.
 # No --sleep-idle-seconds: a loaded model stays resident until it is unloaded by
@@ -53,7 +56,7 @@ Volume=/etc/llama-server:/config:z
 # model means unloading the first one first.
 # No quotes here: quadlet/systemd eats double quotes in Exec= and word-splits
 # expanded variables, so anything with spaces or JSON goes in the INI file.
-Exec=--models-preset /config/llama-server-config.ini --port 8001 --tools all --models-max 1
+Exec=--models-preset /models/llama-server-config.ini --port 8001 --tools all --models-max 1
 AddDevice=nvidia.com/gpu=all
 # Liveness only, and deliberately not fatal (no HealthOnFailure): /health is
 # answered by the router process and returns 200 even when no model is loaded,
