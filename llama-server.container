@@ -1,5 +1,5 @@
 [Unit]
-Description=llama.cpp OpenAI-compatible server (CUDA)
+Description=llama.cpp router server (CUDA)
 # Wait for the cached storage volume — the bind source below lives on it. Without
 # a real dependency podman happily bind-mounts an empty directory off the OS disk
 # and the --models-preset (and every model) silently disappears. RequiresMountsFor=
@@ -7,6 +7,8 @@ Description=llama.cpp OpenAI-compatible server (CUDA)
 #   Requires=var-mnt-storage.mount + After=var-mnt-storage.mount
 # (the quadlet generator derives the same dependency from each Volume= host
 # path; naming it here keeps the intent visible and survives edits below).
+# It is a [Unit] key: in [Container] the generator rejects the file and NO unit
+# is generated.
 RequiresMountsFor=/var/mnt/storage
 # Hold off until the model files are actually on the volume. This unit is part
 # of every boot (see [Install] below); the condition is what keeps the boots
@@ -14,10 +16,25 @@ RequiresMountsFor=/var/mnt/storage
 # below ever crash-loops on an empty volume. fetch-models.service starts this
 # unit on the boot that writes that marker.
 ConditionPathExists=/var/lib/fetch-models.done
+# 0 disables systemd's start rate limit (default: 5 starts per 10s). With
+# Pull=always a boot without a network makes podman fail in well under a second,
+# so the default limit would put this unit in failed and it would never retry —
+# the box would come up with no server until someone ran systemctl manually.
+# Retrying forever is the intended behaviour: it self-heals when the network
+# returns. Do NOT add StartLimitBurst=0 as well; interval 0 is the switch.
+StartLimitIntervalSec=0
 
 [Container]
 Image=ghcr.io/ggml-org/llama.cpp:server-cuda13
 ContainerName=llama-server
+# Pull on every start: the newest server-cuda13 build is what runs after each
+# boot. Cost when nothing changed is one manifest check (measured 0.6s); cost
+# when it did change is 3.32 GB inside the start job (see TimeoutStartSec) and
+# one old untagged image left behind (see README, "image garbage").
+# The key is Pull=. podman 5.8 has NO ImageAutoPull and NO ImagePullPolicy in
+# quadlet; either one makes the generator reject the file and the unit vanishes
+# with only a journal line as evidence.
+Pull=always
 PublishPort=8001:8001/tcp
 # The model tree is the bind source, not the whole volume: /models then holds
 # the models directly (/models/Qwen3.8-27B-GGUF/...) instead of nesting a
@@ -25,8 +42,26 @@ PublishPort=8001:8001/tcp
 # before this unit may start (see the condition above).
 Volume=/var/mnt/storage/llama-models:/models:z
 Volume=/etc/llama-server:/config:z
-Exec=--models-preset /config/llama-server-config.ini --port 8001 --tools all
+# --models-preset is a ROUTER-mode flag: the INI's sections are the model IDs
+# clients ask for and the router loads/unloads child instances on demand
+# (GET /models, POST /models/load, POST /models/unload).
+# --models-max 1: the default is 4 simultaneous instances, which with a 29 GB
+#   model on 2x24 GB GPUs is a guaranteed thrash/OOM.
+# --sleep-idle-seconds 900: the router never unloads an idle model by default,
+#   so with --models-max 1 a second model could never load at all.
+# No quotes here: quadlet/systemd eats double quotes in Exec= and word-splits
+# expanded variables, so anything with spaces or JSON goes in the INI file.
+Exec=--models-preset /config/llama-server-config.ini --port 8001 --tools all --models-max 1 --sleep-idle-seconds 900
 AddDevice=nvidia.com/gpu=all
+# Liveness only, and deliberately not fatal (no HealthOnFailure): /health is
+# answered by the router process and returns 200 even when no model is loaded,
+# so it proves the HTTP loop is alive. curl is in the image, wget is not.
+# Spaces here are fine (quadlet escapes them as \x20 in the generated unit).
+HealthCmd=curl -fsS http://127.0.0.1:8001/health
+HealthInterval=30s
+HealthTimeout=30s
+HealthRetries=3
+HealthStartPeriod=60s
 
 # Restart goes in [Service], NOT [Container]: the podman 5.8 quadlet
 # generator rejects Restart= in [Container] (unit is not generated).
@@ -34,6 +69,15 @@ AddDevice=nvidia.com/gpu=all
 # restarts on crash/exit, but not after an explicit `systemctl stop`.
 [Service]
 Restart=always
+# 15s, not the 100ms default: the retry has to be slow enough to look like
+# retrying (and to stay clear of any future rate limit), and a pull retry
+# hammering a registry at 10 Hz is not what anyone wants to explain.
+RestartSec=15s
+# The 3.32 GB pull of Pull=always happens before conmon reports readiness, so
+# the 90s default can expire mid-download and systemd kills a perfectly healthy
+# start. Same choice as fetch-models.service's TimeoutStartSec=infinity.
+# Alternative, if "never time out" is too strong: TimeoutStartSec=45min.
+TimeoutStartSec=infinity
 
 # Enabled on every boot. The quadlet generator applies [Install] itself (which
 # is also why `systemctl enable`/`disable` refuse to work on generated units —

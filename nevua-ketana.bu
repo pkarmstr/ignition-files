@@ -71,6 +71,8 @@ storage:
         local: llama-server-config.ini
 
     # --- llama.cpp server: Podman quadlet ---
+    # Pull-on-boot: the quadlet carries Pull=always, so every start re-resolves
+    # the server-cuda13 tag and the box runs the newest llama.cpp build.
     - path: /etc/containers/systemd/llama-server.container
       mode: 0644
       overwrite: true
@@ -322,6 +324,9 @@ systemd:
     # entry only records that the name is taken.
     # `enabled: false` here is a harmless no-op for the generated unit
     # (Ignition's disable is skipped when the unit is not enabled).
+    # Because the unit pulls its image on every start, a boot with no registry
+    # makes podman fail immediately: the quadlet sets StartLimitIntervalSec=0 and
+    # RestartSec=15s so it retries forever instead of landing in failed.
 
     - name: llama-server.service
       enabled: false
