@@ -1,19 +1,29 @@
 [Unit]
 Description=llama.cpp OpenAI-compatible server (CUDA)
-# Wait for the cached storage volume. Without a real dependency podman happily
-# bind-mounts an empty /var/mnt/storage directory and the --models-preset (and
-# every model) silently disappears. RequiresMountsFor= pulls in the native
-# mount unit and orders after it:
+# Wait for the cached storage volume — the bind source below lives on it. Without
+# a real dependency podman happily bind-mounts an empty directory off the OS disk
+# and the --models-preset (and every model) silently disappears. RequiresMountsFor=
+# pulls in the native mount unit and orders after it:
 #   Requires=var-mnt-storage.mount + After=var-mnt-storage.mount
 # (the quadlet generator derives the same dependency from each Volume= host
 # path; naming it here keeps the intent visible and survives edits below).
 RequiresMountsFor=/var/mnt/storage
+# Hold off until the model files are actually on the volume. This unit is part
+# of every boot (see [Install] below); the condition is what keeps the boots
+# before the model fetch quiet — a condition skip is not a failure, so nothing
+# below ever crash-loops on an empty volume. fetch-models.service starts this
+# unit on the boot that writes that marker.
+ConditionPathExists=/var/lib/fetch-models.done
 
 [Container]
 Image=ghcr.io/ggml-org/llama.cpp:server-cuda13
 ContainerName=llama-server
 PublishPort=8001:8001/tcp
-Volume=/var/mnt/storage:/models:z
+# The model tree is the bind source, not the whole volume: /models then holds
+# the models directly (/models/Qwen3.8-27B-GGUF/...) instead of nesting a
+# llama-models layer inside it. The directory is created by fetch-models.sh
+# before this unit may start (see the condition above).
+Volume=/var/mnt/storage/llama-models:/models:z
 Volume=/etc/llama-server:/config:z
 Exec=--models-preset /config/llama-server-config.ini --port 8001 --tools all
 AddDevice=nvidia.com/gpu=all
@@ -25,12 +35,13 @@ AddDevice=nvidia.com/gpu=all
 [Service]
 Restart=always
 
-# Deliberately NO [Install] section: with [Install] the quadlet generator
-# auto-enables the unit on every boot, and `systemctl enable`/`disable`
-# do not work on generated units ("transient or generated").
-# Shipped disabled until the models are restored to the storage volume
-# (/var/mnt/storage on the host, /models in the container). To enable later:
-#   mkdir -p /etc/containers/systemd/llama-server.container.d
-#   printf '[Install]\nWantedBy=multi-user.target\n' \
-#     > /etc/containers/systemd/llama-server.container.d/enable.conf
-#   systemctl daemon-reload && systemctl start llama-server.service
+# Enabled on every boot. The quadlet generator applies [Install] itself (which
+# is also why `systemctl enable`/`disable` refuse to work on generated units —
+# the generator writes the .wants symlink, there is no unit file to enable).
+# The thing that decides whether this service runs is the ConditionPathExists
+# above, not this section: without the model files there is nothing to serve,
+# and the unit is skipped until fetch-models.service has written its marker.
+# To run it by hand later:
+#   systemctl restart llama-server.service
+[Install]
+WantedBy=multi-user.target

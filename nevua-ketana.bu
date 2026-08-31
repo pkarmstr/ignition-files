@@ -56,6 +56,13 @@ storage:
       contents:
         local: setup-storage.sh
 
+    # --- Machine-specific: model fetch script (nevua-ketana) ---
+    - path: /usr/local/bin/fetch-models.sh
+      mode: 0755
+      overwrite: true
+      contents:
+        local: fetch-models.sh
+
     # --- llama.cpp server: config file ---
     - path: /etc/llama-server/llama-server-config.ini
       mode: 0644
@@ -263,15 +270,56 @@ systemd:
         [Install]
         WantedBy=multi-user.target
 
+    # --- Machine-specific: seed the model files (nevua-ketana) ---
+    # A ~30 GB GGUF cannot be embedded in an Ignition config, so the one model
+    # this box serves is pulled over the LAN once the volume exists. Needs the
+    # second HTTP server on erevrav — see "Serving files over HTTP" in the
+    # README.
+    # Same marker idiom as the units above: After= plus a ConditionPathExists on
+    # the previous step's done marker. Because setup-storage.service is in this
+    # boot's transaction, the condition is evaluated after that unit's job ends,
+    # so the marker already exists on the boot that builds the volume — and on
+    # the boots before it the condition fails cleanly (no "Dependency failed").
+    # No Requires= on var-mnt-storage.mount on purpose: on the boot that creates
+    # the volume that unit's own condition gate fails early, and a hard
+    # dependency would only turn a wait into a failed job. fetch-models.sh waits
+    # for the mount with mountpoint(8) instead.
+    # TimeoutStartSec: ~30 GB on the LAN outruns the 90s default by minutes.
+    # The last ExecStart brings up the llama.cpp server on the *same* boot: the
+    # quadlet is gated on /var/lib/fetch-models.done, so its boot-time job was
+    # already skipped by then and --no-block just re-queues it (conditions are
+    # re-checked, and this time the marker exists).
+
+    - name: fetch-models.service
+      enabled: true
+      contents: |
+        [Unit]
+        Description=Fetch llama.cpp model files onto the storage volume (one-shot)
+        ConditionPathExists=/var/lib/setup-storage.done
+        ConditionPathExists=!/var/lib/fetch-models.done
+        After=setup-storage.service var-mnt-storage.mount network-online.target
+        Wants=network-online.target
+
+        [Service]
+        Type=oneshot
+        RemainAfterExit=yes
+        StandardOutput=journal+console
+        TimeoutStartSec=infinity
+        ExecStart=/usr/local/bin/fetch-models.sh
+        ExecStart=/usr/bin/touch /var/lib/fetch-models.done
+        ExecStart=/usr/bin/systemctl disable fetch-models.service
+        ExecStart=/usr/bin/systemctl --no-block start llama-server.service
+
+        [Install]
+        WantedBy=multi-user.target
+
     # --- llama.cpp server: quadlet + firewall ---
     # The quadlet file (llama-server.container) generates the unit
-    # "llama-server.service" (the .container suffix is stripped).
-    # It ships DISABLED: the quadlet has no [Install] section, which is
-    # the only way to keep a generated quadlet unit from starting at boot
-    # (the generator auto-applies [Install]; `systemctl enable`/`disable`
-    # do not work on generated units). The model data must be restored to
-    # the models volume first; see the enablement steps in the comments
-    # of llama-server.container.
+    # "llama-server.service" (the .container suffix is stripped), and that file
+    # owns the unit's enablement through its own [Install] + ConditionPathExists
+    # pair — see the comments in llama-server.container. Nothing has to be
+    # enabled or disabled from here for a unit a generator writes at boot; this
+    # entry only records that the name is taken.
     # `enabled: false` here is a harmless no-op for the generated unit
     # (Ignition's disable is skipped when the unit is not enabled).
 
