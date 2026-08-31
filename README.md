@@ -74,7 +74,7 @@ The provisioning here is designed as a **3-reboot chain** — each step reboots 
 | 4 | `setup-storage.service` | Runs `/usr/local/bin/setup-storage.sh` once: wipes both data disks, builds the LVM cache volume, formats XFS, sets marker, starts `var-mnt-storage.mount`, disables itself (no reboot) |
 | 4..N | `var-mnt-storage.mount` | Mounts `vg_storage/lv_data` (XFS) on `/var/mnt/storage`. Skipped until the marker above exists; on boot 4 it is started by `setup-storage.service` itself |
 | 4 (later) | `fetch-models.service` | Waits for that mount, fetches the model + chat template from erevrav into `/var/mnt/storage/llama-models`, sets its marker, starts `llama-server.service`, disables itself (no reboot) |
-| 4..N | `llama-server.service` | The quadlet (`llama-server.container`), enabled at every boot but **gated** on `/var/lib/fetch-models.done` — skipped, never failed, until the model exists |
+| 4..N | `llama-server.service` | The quadlet (`llama-server.container`), enabled at every boot but **gated** on `/var/lib/fetch-models.done` — skipped, never failed, until the model exists. Pulls the `server-cuda13` tag on every start (0.6 s unchanged, 3.32 GB changed) |
 | N | `wol-enable.service` | Runs at **every** boot — enables Wake-on-LAN |
 
 ### Why this ordering matters
@@ -125,6 +125,96 @@ and the llama.cpp server starts against it. Notes on how that is wired:
   paths. A later full restore is an `rsync` of that one directory — no renaming,
   no re-linking.
 
+## The llama.cpp server
+
+One container is the whole server: the rootful quadlet
+`/etc/containers/systemd/llama-server.container`, writing the unit
+`llama-server.service`, with its config bind-mounted from
+`/etc/llama-server/llama-server-config.ini` to `/config` and the model tree from
+`/var/mnt/storage/llama-models` to `/models`.
+
+### Router mode
+
+`--models-preset /config/llama-server-config.ini` runs llama.cpp in **router
+mode**: each INI section is a model ID, and the router spawns a child
+`llama-server` instance for the one a client asks for, then loads and unloads
+them on demand.
+
+| Endpoint | Meaning |
+|---|---|
+| `GET /v1/models` | the model IDs and each one's `status.value` (`loaded` / `loading` / `unloaded`) |
+| `POST /models/load` `{"model":"<id>"}` | load one now |
+| `POST /models/unload` `{"model":"<id>"}` | free it again |
+| `GET /props` | router settings — `max_instances`, `models_autoload`, `build_info` |
+| `GET /health` | router **liveness**, not model readiness: `200` even with nothing loaded |
+
+- **`--models-max 1`** — one instance at a time. The default is 4, and four copies of a 29 GB model on 2×24 GB GPUs is an OOM, not a feature. With 1, a second model can only load once the first has freed the memory, which is what **`--sleep-idle-seconds 900`** is for: the router never unloads an idle model by default, so a model is freed 15 minutes after its last request and the next request pays a cold load (~40 s here).
+- **Nothing is preloaded.** The log says `starting server in router mode. models will be automatically loaded on-demand`, and a model appears only when a client asks for it (or you `POST /models/load`). `unloaded` in `/v1/models` on a freshly started server is normal, not broken.
+- **The health check is liveness only** — `curl -fsS http://127.0.0.1:8001/health` every 30 s, 60 s start period, and deliberately **no** `HealthOnFailure`: an HTTP check must not be able to kill a session. `curl` is in the image, `wget` is not.
+
+### Pull on boot
+
+`Pull=always` puts the pull inside the start path (`podman run --pull always`), so every start re-resolves `server-cuda13` and a boot runs the newest llama.cpp build — no update mechanism to maintain, and no update timer either: no `AutoUpdate=`, no `podman-auto-update.timer`, no `.image` units.
+
+- Unchanged tag: one manifest check, ~0.6 s. Changed tag: 3.32 GB **inside the start job**, which is why the unit sets `TimeoutStartSec=infinity` — the 90 s default would kill a healthy download mid-layer.
+- No registry or no DNS at boot makes podman fail in under a second. `StartLimitIntervalSec=0` plus `RestartSec=15s` means it then retries **forever** instead of tripping the default rate limit (5 starts per 10 s) and staying in `failed`: measured against a nonexistent tag, failures at 05:29:24, :39, :55, 05:30:10 with `NRestarts` climbing and the unit held in `activating`. The box comes back on its own when the network does.
+- Which situation you are in: `systemctl status llama-server.service` (`activating (auto-restart)` = retrying) and `journalctl -u llama-server.service -b`. A pull failure logs `Error: unable to copy from source docker://…` and a podman `image pull-error` event line.
+- `systemctl show -p TimeoutStartSec` prints **nothing** on systemd 259 — the properties are `TimeoutStartUSec` and `StartLimitIntervalUSec`. A missing line means a wrong property name, not a missing setting; the truth is in the generated `/run/systemd/generator/llama-server.service`.
+
+### Image garbage
+
+A pull that actually changes the tag leaves the previous image behind, untagged:
+
+```bash
+sudo podman images -a --no-trunc   # full IDs, including the <none> rows
+sudo podman image prune -f         # dangling only — never removes tagged or in-use images
+```
+
+There is deliberately **no prune timer**: pruning is what destroys the rollback
+below, so it stays a human decision.
+
+### Manual rollback
+
+```bash
+# BEFORE the first pull that changes anything, record the known-good image:
+sudo podman image inspect --format '{{.Id}}' ghcr.io/ggml-org/llama.cpp:server-cuda13
+
+# A new build is broken at runtime (starts, cannot load / serve):
+sudo podman images -a --no-trunc | grep llama           # find the previous image ID
+sudo podman tag <old-image-id> ghcr.io/ggml-org/llama.cpp:server-cuda13
+sudo systemctl restart llama-server.service            # --replace picks up the re-tagged image
+```
+
+`Pull=always` re-resolves the tag on the *next* start, so a re-tag only survives
+until the next boot or restart — that is honest: pinning is a repo edit (point
+`Image=` at a digest or a dated tag), not a runtime accident.
+
+### Changing the quadlet on an installed box
+
+An `.ign` change only takes effect on a **reinstall** — Ignition runs once. A live
+box is brought to the repo's version of the quadlet by replacing the embedded
+file and reloading:
+
+```bash
+# One bad key makes the generator skip the WHOLE file: no unit, and only a
+# journal line ("unsupported key … in group 'Container'") as evidence. So check
+# the syntax where nothing can run, first:
+scp llama-server.container keelan@192.168.0.45:/tmp/
+ssh keelan@192.168.0.45 'sudo cp /tmp/llama-server.container /run/containers/systemd/qsyntax-check.container &&
+  sudo /usr/lib/systemd/system-generators/podman-system-generator --dryrun |
+    sed -n "/---qsyntax-check/,/^---/p";
+  sudo rm -f /run/containers/systemd/qsyntax-check.container'
+# expect a full unit (--pull always, --health-cmd, TimeoutStartSec=infinity) and
+# no "unsupported key" line — an empty section means the file produced nothing
+
+ssh keelan@192.168.0.45 'sudo cp /tmp/llama-server.container /etc/containers/systemd/llama-server.container &&
+  sudo systemctl daemon-reload && sudo systemctl restart llama-server.service'
+```
+
+`daemon-reload` re-runs the quadlet generator; `restart` recreates the container
+(`podman run --replace`), so whatever was loaded goes with it — expect a pull
+plus ~40 s before the next request is answered.
+
 ## File Structure
 
 ```
@@ -135,7 +225,7 @@ ignition-files/
 ├── AGENTS.md                     # Rules for AI agents working in this repo
 ├── HARDWARE.md                   # Hardware + stable drive identifiers (nevua-ketana)
 ├── nevua-ketana.bu               # Per-machine butane config
-├── llama-server.container        # Machine-specific: podman quadlet (embedded via local:)
+├── llama-server.container        # Machine-specific: podman quadlet — pull-on-boot llama.cpp router (embedded via local:)
 ├── llama-server-config.ini       # Machine-specific: llama.cpp preset config (embedded via local:)
 ├── llama-server-firewall.service # Machine-specific: firewalld rule for port 8001 (embedded via local:)
 ├── fetch-models.sh               # Machine-specific: pulls the model files from erevrav onto the volume (embedded verbatim as /usr/local/bin/fetch-models.sh)
