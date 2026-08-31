@@ -148,7 +148,8 @@ them on demand.
 | `GET /props` | router settings — `max_instances`, `models_autoload`, `build_info` |
 | `GET /health` | router **liveness**, not model readiness: `200` even with nothing loaded |
 
-- **`--models-max 1`** — one instance at a time. The default is 4, and four copies of a 29 GB model on 2×24 GB GPUs is an OOM, not a feature. With 1, a second model can only load once the first has freed the memory, which is what **`--sleep-idle-seconds 900`** is for: the router never unloads an idle model by default, so a model is freed 15 minutes after its last request and the next request pays a cold load (~40 s here).
+- **`--models-max 1`** — one instance at a time. The default is 4, and four copies of a 29 GB model on 2×24 GB GPUs is an OOM, not a feature.
+- **A loaded model stays loaded.** There is deliberately no `--sleep-idle-seconds`: nothing unloads on a timer, so a model holds its memory until you `POST /models/unload` it or the container restarts. The consequence of pairing that with `--models-max 1` is that the single slot is always occupied — to serve a second model, unload the first one.
 - **Nothing is preloaded.** The log says `starting server in router mode. models will be automatically loaded on-demand`, and a model appears only when a client asks for it (or you `POST /models/load`). `unloaded` in `/v1/models` on a freshly started server is normal, not broken.
 - **The health check is liveness only** — `curl -fsS http://127.0.0.1:8001/health` every 30 s, 60 s start period, and deliberately **no** `HealthOnFailure`: an HTTP check must not be able to kill a session. `curl` is in the image, `wget` is not.
 

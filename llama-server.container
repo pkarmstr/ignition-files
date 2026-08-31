@@ -47,11 +47,13 @@ Volume=/etc/llama-server:/config:z
 # (GET /models, POST /models/load, POST /models/unload).
 # --models-max 1: the default is 4 simultaneous instances, which with a 29 GB
 #   model on 2x24 GB GPUs is a guaranteed thrash/OOM.
-# --sleep-idle-seconds 900: the router never unloads an idle model by default,
-#   so with --models-max 1 a second model could never load at all.
+# No --sleep-idle-seconds: a loaded model stays resident until it is unloaded by
+# hand (POST /models/unload) or the container restarts. The price of that is
+# that with --models-max 1 the one slot stays occupied, so loading a second
+# model means unloading the first one first.
 # No quotes here: quadlet/systemd eats double quotes in Exec= and word-splits
 # expanded variables, so anything with spaces or JSON goes in the INI file.
-Exec=--models-preset /config/llama-server-config.ini --port 8001 --tools all --models-max 1 --sleep-idle-seconds 900
+Exec=--models-preset /config/llama-server-config.ini --port 8001 --tools all --models-max 1
 AddDevice=nvidia.com/gpu=all
 # Liveness only, and deliberately not fatal (no HealthOnFailure): /health is
 # answered by the router process and returns 200 even when no model is loaded,
