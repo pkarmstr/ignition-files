@@ -23,10 +23,10 @@
 #     /mnt/storage/nevua-ketana-backup/20tb-hdd/llama-models/ \
 #     keelan@192.168.0.45:/var/mnt/storage/llama-models/
 #
-# Nothing about these files is discovered at runtime: every entry below is
-# "<bytes> <path>", the sizes read from ls -l on erevrav on 2026-08-30. A file
-# whose length does not match is a hard error, which is the point — a truncated
-# GGUF loads and then answers with garbage.
+# Every file is fetched unconditionally, straight over whatever is at the
+# destination. This runs once, on a volume that was just formatted, and
+# fetch-models.service does not set its marker unless this script exits 0, so a
+# failed run is fixed by running it again, not by comparing lengths.
 #
 # http.server does not implement Range requests, so a broken transfer cannot be
 # resumed: each curl retry, and each re-run of this script after a failure,
@@ -39,14 +39,14 @@ MNT_POINT="/var/mnt/storage"          # must match var-mnt-storage.mount's Where
 DEST_ROOT="$MNT_POINT/llama-models"   # bind-mounted as /models in llama-server.container
 OWNER="keelan"
 
-# "<expected bytes> <path relative to the served directory>"
-# The model paths inside llama-server-config.ini are these same paths with
-# /models in front, and the INI is itself fetched into the tree: that directory
-# is the whole input to the server, which is why nothing is seeded into /etc.
+# Paths relative to the served directory. The model paths inside
+# llama-server-config.ini are these same paths with /models in front, and the
+# INI is itself fetched into the tree: that directory is the whole input to the
+# server, which is why nothing is seeded into /etc.
 FILES=(
-  "711 llama-server-config.ini"
-  "31457991680 Qwen3.8-27B-GGUF/Qwen3.8-27B-UD-Q8_K_XL.gguf"
-  "27167 Qwen-Fixed-Chat-Templates/chat_template.jinja"
+  "llama-server-config.ini"
+  "Qwen3.8-27B-GGUF/Qwen3.8-27B-UD-Q8_K_XL.gguf"
+  "Qwen-Fixed-Chat-Templates/chat_template.jinja"
 )
 
 [ "$EUID" -eq 0 ] || { echo "Please run as root (sudo)." >&2; exit 1; }
@@ -78,37 +78,21 @@ fi
 # given, and the parents it creates on the way there land as root.
 install -d -o "$OWNER_UID" -g "$OWNER_GID" "$DEST_ROOT"
 
-for entry in "${FILES[@]}"; do
-    read -r want_bytes rel_path <<< "$entry"
+for rel_path in "${FILES[@]}"; do
     dest="$DEST_ROOT/$rel_path"
     # install -d: mkdir -p that also hands the new directory to $OWNER, so
     # nothing on the volume is left owned by root.
     install -d -o "$OWNER_UID" -g "$OWNER_GID" "$(dirname "$dest")"
 
-    # A re-run after a failure: a file of the expected length is already done.
-    if [ -f "$dest" ] && [ "$(stat -c %s "$dest")" -eq "$want_bytes" ]; then
-        echo "Already present: $rel_path ($want_bytes bytes)"
-        continue
-    fi
-
-    echo "Fetching $rel_path ($want_bytes bytes) from $BASE_URL..."
-    # .part + mv: the real path only ever appears once a complete file is behind
-    # it, so an interrupted run cannot leave something that looks installed.
+    echo "Fetching $rel_path from $BASE_URL..."
     # -f makes a 404 from http.server a failure; --retry-all-errors also retries
     # a truncated body, which is how a server that dies mid-transfer shows up.
     curl --fail --location --silent --show-error \
          --retry 5 --retry-delay 10 --retry-all-errors \
-         --output "$dest.part" "$BASE_URL/$rel_path"
+         --output "$dest" "$BASE_URL/$rel_path"
 
-    got_bytes=$(stat -c %s "$dest.part")
-    if [ "$got_bytes" -ne "$want_bytes" ]; then
-        echo "Error: $rel_path is $got_bytes bytes, expected $want_bytes." >&2
-        exit 1
-    fi
-
-    mv "$dest.part" "$dest"
     chown "$OWNER_UID:$OWNER_GID" "$dest"
-    echo "Installed $dest ($got_bytes bytes)"
+    echo "Installed $dest"
 done
 
 echo "Success! Model files are in $DEST_ROOT"

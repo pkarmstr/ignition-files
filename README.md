@@ -108,9 +108,10 @@ starts against them. Notes on how that is wired:
   install; the model server (33334) has to be up for boot 4. `python3 -m
   http.server` answers GET only and implements no `Range` header, so a broken
   transfer cannot be resumed: `curl --retry` restarts the file from byte 0, and
-  so does re-running the script. That is why the size of every fetched file is
-  hard-coded — the check that turns a truncated file into an error instead of a
-  model that answers with garbage.
+  so does re-running the script. Every file is fetched unconditionally over
+  whatever is at the destination — this runs once, onto a volume that was just
+  formatted — so a re-run after a failure is a plain re-fetch, with no sizes or
+  checksums to keep in step with the served files.
 - **Marker + gate.** `/var/lib/fetch-models.done` is both the "run once" marker
   and the condition that lets `llama-server.service` run. A quadlet with an
   `[Install]` section is enabled by the generator on every boot, so the gate is
