@@ -9,6 +9,12 @@ Provisioning configs for FCOS (Fedora CoreOS) machines using [Butane](https://co
 # ('--strict' is added automatically by butane.sh)
 ./butane.sh nevua-ketana.bu nevua-ketana.ign
 
+# Secrets (the password hash and SSH public key) are NOT in the .bu. They live
+# in a gitignored 'secrets.env' next to the .bu and are substituted into a
+# temp copy by butane.sh at transpile time:
+#   USER_PASSWORD_HASH='...'
+#   USER_SSH_PUBLIC_KEY='ssh-rsa ...'
+
 # 'local:' file references (embedded scripts, config files) are resolved
 # relative to the *input .bu file's directory*. butane.sh passes --files-dir
 # to the container automatically — don't pass it yourself.
@@ -261,6 +267,7 @@ ignition-files/
 ├── AGENTS.md                     # Rules for AI agents working in this repo
 ├── HARDWARE.md                   # Hardware + stable drive identifiers (nevua-ketana)
 ├── nevua-ketana.bu               # Per-machine butane config
+├── secrets.env (gitignored)      # Password hash + SSH public key, substituted into the .bu by butane.sh
 ├── llama-server.container        # Machine-specific: podman quadlet — pull-on-boot llama.cpp router (embedded via local:)
 ├── llama-server-config.ini       # llama.cpp router preset INI — fetched into the model tree by fetch-models.sh; the repo copy is the record, not an input
 ├── llama-server-firewall.service # Machine-specific: firewalld rule for port 8001 (embedded via local:)
@@ -281,7 +288,9 @@ Butane has no `include` or inheritance mechanism. Any composability requires cus
 ## Adding a New Machine
 
 1. Copy an existing `.bu` file as a starting point
-2. Change `passwd.users[0].password_hash` and `ssh_authorized_keys`
+2. Create a `secrets.env` next to the new `.bu` with the machine's
+   `USER_PASSWORD_HASH` and `USER_SSH_PUBLIC_KEY` (the `.bu` carries
+   `${...}` placeholders; butane.sh substitutes them at transpile time)
 3. Update machine-specific sections in the `.bu`:
    - `storage.files` — hostname, WoL script interface
    - `systemd.units` — WoL service, and the storage mount unit (`var-mnt-storage.mount`:
