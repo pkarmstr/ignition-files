@@ -1,10 +1,17 @@
 ---
 type: Hardware Reference
 title: "hava-amina hardware reference"
-description: Physical hardware inventory and stable drive/device identifiers for the hava-amina AMD system, for reproducible Ignition builds.
+description: Physical hardware inventory and stable drive/device identifiers for the hava-amina AMD system (CORSAIR AI WORKSTATION 300, Ryzen AI MAX+ 395, 2× 2 TB NVMe), for reproducible Ignition builds.
 resource: ssh://keelan@192.168.0.46/
-tags: [hardware, hardware-reference, ignition, fedora-coreos, storage, drives, amd]
-status: draft
+tags: [hardware, hardware-reference, ignition, fedora-coreos, storage, drives, amd, strix-halo]
+status: stable
+stale_after: 2027-09-07T00:00:00Z
+generated: { by: pi-coding-agent, at: 2026-09-07 }
+sources:
+  - id: live-system-scan
+    resource: "hardware introspection commands (lsblk, /dev/disk/by-id, nvme list, lspci -k/-vv, dmidecode, dmesg, dnf provides) run against keelan@192.168.0.46 on 2026-09-07"
+    title: Live system introspection of hava-amina
+    author: pi-coding-agent
 ---
 
 # Hardware Reference — hava-amina
@@ -13,53 +20,127 @@ Purpose: hardware reference for building reproducible Ignition configs for this
 machine. Only physical hardware and stable device identifiers are documented
 here — **not** the current partition layout, filesystems, or software config.
 
-Captured: — (machine not yet provisioned; fill in from a live session via
-`ssh keelan@<IP>` right after the install finishes).
+Captured: 2026-09-07, right after the fresh `ucore-minimal:stable` install
+(kernel 7.1.8-200.fc44, ignition platform = metal).[^live-system-scan]
+
+[^live-system-scan]: Live system introspection of hava-amina
 
 ## System
 
 | Component | Detail |
 |---|---|
-| Board | |
-| BIOS | |
-| CPU | |
-| RAM | |
+| Board | CORSAIR AI WORKSTATION 300 (Strix Halo mini-PC) |
+| BIOS | AXB35-02 3.07 (2025-10-16) |
+| CPU | AMD Ryzen AI MAX+ 395 (Strix Halo) — 16 cores / 32 threads, up to ~5.19 GHz, single socket, 1 NUMA node |
+| RAM | 128 GiB LPDDR5X, **soldered** (SPD shows 8 × 16 GiB Micron `MT62F4G32D8DV-023 WT` at 8532 MT/s, configured 8000 MT/s; all SPD locators read "DIMM 0"). Not upgradeable |
+| iGPU | AMD Radeon 8060S (PCI `c6:00.0`, Strix Halo display controller), amdgpu — open-source driver, no extras needed |
+| NPU | AMD XDNA2 (PCI `c7:00.1`), in-kernel `amdxdna` driver |
 
 ## Drives (stable identifiers)
 
-For each drive: model, serial, firmware, PCI addr/link, and the
-`/dev/disk/by-id/...` paths. HDDs get a `/dev/sdX` name that can change
-between boots/installs; always use a by-id path in ignition
-`storage.disks.device`.
+Two **identical** white-label 2 TB NVMe drives — same model string `PCIe SSD`
+(no vendor identity), same controller (Phison PS5027-E27T, PCIe4, DRAM-less),
+same firmware `ERFM30.1`. Disambiguate **only by serial/EUI**; the model name
+tells you nothing. Both report 512-byte logical and physical sectors.
 
-- Boot drive:
-  - by-id:
+### 1. Boot drive — 2 TB white-label NVMe (Phison PS5027-E27T)
+
+- **Model string:** `PCIe SSD` (vendor: none)
+- **Serial:** `511250820055001423`
+- **EUI-64:** `00000000000000006479a7aeda2005be`
+- **NVMe firmware:** ERFM30.1
+- **PCI:** `c4:00.0`, linked at **Gen4 x4** (16GT/s, confirmed `LnkSta`)
+- by-id paths (all equivalent, pick one and be consistent):
+  - `/dev/disk/by-id/nvme-PCIe_SSD_511250820055001423`
+  - `/dev/disk/by-id/nvme-eui.00000000000000006479a7aeda2005be`
+
+### 2. Second 2 TB white-label NVMe (Phison PS5027-E27T)
+
+- **Model string:** `PCIe SSD` (vendor: none)
+- **Serial:** `511250820055001080`
+- **EUI-64:** `00000000000000006479a7aed5f0000e`
+- **NVMe firmware:** ERFM30.1
+- **PCI:** `c5:00.0`, linked at **Gen4 x4** (16GT/s, confirmed `LnkSta`)
+- by-id paths:
+  - `/dev/disk/by-id/nvme-PCIe_SSD_511250820055001080`
+  - `/dev/disk/by-id/nvme-eui.00000000000000006479a7aed5f0000e`
+- **Note:** at capture this drive already carried a single 1.9 TB
+  partition (`nvme1n1p1`) from before the install. If it is ever used for
+  storage, wipe and build it deliberately — do not assume it is clean.
+
+### Slot topology summary (for future disk-layout planning)
+
+| Location | PCI addr | Link | Drive |
+|---|---|---|---|
+| M.2 slot 1 | c4:00.0 | Gen4 x4 | white-label 2 TB — boot drive |
+| M.2 slot 2 | c5:00.0 | Gen4 x4 | white-label 2 TB |
+
+Strix Halo exposes the M.2 slots through the SoC's GPP/USB4 bridges; there is
+no chipset-level M.2 and no SATA at all.
 
 ## GPUs
 
-AMD system, no NVIDIA. (List any dGPU; the iGPU works with open-source
-amdgpu on the plain `ucore-minimal:stable` tag.)
-
-| # | PCI addr | Model | Link |
+| # | PCI addr | Model | Driver |
 |---|---|---|---|
+| iGPU | c6:00.0 | AMD Radeon 8060S (Strix Halo) | amdgpu (open-source, in the plain `ucore-minimal:stable` image) |
+
+No discrete GPU, no NVIDIA — the plain `stable` tag is the correct rebase
+target.
 
 ## Network
 
-### Wired — (the ignition NIC)
+### Wired — RTL8125 2.5GbE (the ignition NIC)
 
-- **PCI:**
-- **MAC:**
-- **netdev:**
-- **Driver:**
+- **PCI:** `c1:00.0`, vendor/device `10ec:8125` (Realtek RTL8125, rev 05)
+- **MAC:** `84:47:09:73:b0:61`
+- **netdev:** `eno1` — a slot-name override ("OnBoard LAN") beats the
+  PCI-derived name, so this is `eno1`, not `enp…`
+- **Driver:** `r8169` (in-kernel). Verified at 2500 Mb/s full duplex
+
+### Wi-Fi 7 + Bluetooth — MediaTek MT7925 (RZ717) — ⚠ missing firmware by default
+
+- **PCI:** `c3:00.0`, MediaTek MT7925 Wi-Fi 7 160 MHz (Wi-Fi + BT combo)
+- **Driver:** `mt7925e` (in-kernel)
+- **Status at capture: NOT WORKING.** The `mediatek/mt7925/` firmware files
+  are **not** in the `linux-firmware` package on FCOS — they live in the
+  separate **`mt7xxx-firmware`** package. Without it, the driver fails with
+  `Direct firmware load for mediatek/mt7925/WIFI_MT7925_PATCH_MCU_1_1_hdr.bin
+  failed with error -2` in a retry loop that **floods the console at every
+  boot** (looks like "bluetooth driver" spam; it is this Wi-Fi/BT combo card),
+  and no `wlan*`/Bluetooth interfaces appear.
+- **Fix (applied at capture):** `sudo rpm-ostree install mt7xxx-firmware` +
+  reboot. The package is also in `install-user-packages.service` in
+  `hava-amina.bu`, so a fresh install gets it automatically.
+
+## USB4 / Thunderbolt
+
+- Two **AMD Strix Halo USB4 host routers** (PCI `c8:00.5`, `c8:00.6`), bound to
+  the in-kernel `thunderbolt` driver
+- USB-C docks/USB4 peripherals should work with no out-of-tree driver
+
+## USB / misc
+
+- Genesys Logic GL9755 SD card reader (PCI `c2:00.0`, `sdhci-pci`)
+- USB 2.0 hub + keyboard on port 1-1 at capture; a device on port 3-5 was
+  re-enumerating in a loop with `xhci_hcd … Timeout while waiting for setup
+  device command` messages — unidentified, informational only
 
 ## Hardware needing special drivers (summary)
 
-(none expected — AMD, plain stable tag)
+1. **MediaTek MT7925 Wi-Fi 7/BT** — needs the **`mt7xxx-firmware`** rpm-ostree
+   package (Wi-Fi *and* Bluetooth firmware). Until installed, its retry loop
+   floods the console at boot. Covered in the install config.
+2. **AMD XDNA2 NPU** — works with in-kernel `amdxdna`, nothing to do.
 
 ## Suggested stable identifiers for ignition configs
 
 ```text
-# (fill in by-id paths once captured)
+# Boot drive 2 TB
+/dev/disk/by-id/nvme-PCIe_SSD_511250820055001423
+# Second 2 TB
+/dev/disk/by-id/nvme-PCIe_SSD_511250820055001080
+# Wired NIC (for network ignition / WoL)
+eno1   (or MAC 84:47:09:73:b0:61)
 ```
 
 ## Verifying later
@@ -68,7 +149,12 @@ amdgpu on the plain `ucore-minimal:stable` tag.)
 lsblk -o NAME,MODEL,SERIAL,WWN,TRAN,LOG-SEC,PHY-SEC
 ls -l /dev/disk/by-id/
 nvme list
-sudo dmidecode -s baseboard-product-name
-sudo dmidecode -t memory | grep -E "^\s+(Locator|Size):"
-sudo lspci -k | grep -A2 -E "VGA|Ethernet|Network|NVMe|USB 4"
+sudo dmidecode -s system-product-name        # CORSAIR AI WORKSTATION 300
+sudo dmidecode -t memory | grep -E "^\s+(Size|Type|Speed):"
+sudo lspci -k | grep -A2 -E "VGA|Ethernet|Network controller|NVMe|USB 4"
 ```
+
+Re-run these to check whether this document is still current once
+`stale_after` passes; drive serials/EUIs are the fields most likely to
+change (e.g. after a disk swap — and with two identical drives, swapping one
+silently swaps the identifier).

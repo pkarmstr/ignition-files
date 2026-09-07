@@ -94,7 +94,7 @@ systemd:
         Type=oneshot
         RemainAfterExit=yes
         StandardOutput=journal+console
-        ExecStart=/usr/bin/rpm-ostree install neovim tmux tree btop
+        ExecStart=/usr/bin/rpm-ostree install neovim tmux tree btop mt7xxx-firmware
         ExecStart=/usr/bin/touch /var/lib/install-user-packages.done
         ExecStart=/usr/bin/systemctl disable install-user-packages.service
         ExecStart=/usr/bin/systemctl reboot
