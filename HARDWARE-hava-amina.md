@@ -121,9 +121,19 @@ target.
 ## USB / misc
 
 - Genesys Logic GL9755 SD card reader (PCI `c2:00.0`, `sdhci-pci`)
-- USB 2.0 hub + keyboard on port 1-1 at capture; a device on port 3-5 was
-  re-enumerating in a loop with `xhci_hcd … Timeout while waiting for setup
-  device command` messages — unidentified, informational only
+- Working devices at capture: 4-port USB 2.0 hub (1-1) with a
+  Winchiphead `USB2IIC_CTP_CONTROL` touch/I2C bridge (1-1.1) and a USB
+  keyboard (1-1.3); 4-port USB 3.0 hub (2-1)
+- ⚠ **Faulty device on root-hub port 3-5** (root hub `usb3` = xHCI at PCI
+  `c8:00.0`, one of the SoC's native USB ports): the device presents as
+  high-speed but never answers a descriptor read (`error -110`), the kernel
+  power-cycles the port and retries until `unable to enumerate` — a ~60–70 s
+  storm at **every boot** that blocks one udev worker (``usb3: Worker …
+  taking a long time``) and delays boot that long. The kernel gives up
+  cleanly afterwards; nothing else fails. Identify by unplugging devices
+  from the USB-A/Type-C ports served by `c8:00.0` one at a time and
+  rebooting; if the storm persists with the port empty, the port itself is
+  faulty
 
 ## Hardware needing special drivers (summary)
 
