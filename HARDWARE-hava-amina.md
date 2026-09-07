@@ -30,7 +30,7 @@ Captured: 2026-09-07, right after the fresh `ucore-minimal:stable` install
 | Component | Detail |
 |---|---|
 | Board | CORSAIR AI WORKSTATION 300 (Strix Halo mini-PC) |
-| BIOS | AXB35-02 3.07 (2025-10-16). **Power/performance mode set to “performance”** — the default mode failed to enumerate the internal Bluetooth USB function at boot (see USB section); a fresh BIOS reset would revert this |
+| BIOS | AXB35-02 3.07 (2025-10-16), power/performance mode set to “performance” (set before the 2026-09-07 install; not the fix for the BT enumeration issue — see USB section) |
 | CPU | AMD Ryzen AI MAX+ 395 (Strix Halo) — 16 cores / 32 threads, up to ~5.19 GHz, single socket, 1 NUMA node |
 | RAM | 128 GiB LPDDR5X, **soldered** (SPD shows 8 × 16 GiB Micron `MT62F4G32D8DV-023 WT` at 8532 MT/s, configured 8000 MT/s; all SPD locators read "DIMM 0"). Not upgradeable |
 | iGPU | AMD Radeon 8060S (PCI `c6:00.0`, Strix Halo display controller), amdgpu — open-source driver, no extras needed |
@@ -111,9 +111,8 @@ target.
 - **Fix (applied at capture):** `sudo rpm-ostree install mt7xxx-firmware` +
   reboot. The package is also in `install-user-packages.service` in
   `hava-amina.bu`, so a fresh install gets it automatically. Wi-Fi and
-  Bluetooth both work after this — the Bluetooth half additionally needed the
-  BIOS power/performance mode set to “performance” to enumerate; see the USB
-  section above.
+  Bluetooth both work after this — the Bluetooth half had a separate,
+  now-resolved enumeration issue; see the USB section above.
 
 ## USB4 / Thunderbolt
 
@@ -127,18 +126,25 @@ target.
 - Working devices at capture: 4-port USB 2.0 hub (1-1) with a
   Winchiphead `USB2IIC_CTP_CONTROL` touch/I2C bridge (1-1.1) and a USB
   keyboard (1-1.3); 4-port USB 3.0 hub (2-1)
-- ⚠ **Internal Bluetooth USB function needed BIOS “performance” power mode.**
-  Port 3-5 of root hub `usb3` (xHCI at PCI `c8:00.0`) is the **USB-facing
-  Bluetooth radio of the MT7925 Wi-Fi/BT combo card** (`0e8d:0717
-  “Wireless_Device”, MediaTek Inc.`) — an *internal* connection, not an
-  external port. Under the default BIOS power mode it presented but never
-  answered a descriptor read (`error -110`), so the kernel power-cycled the
-  port and retried until `unable to enumerate` — a ~60–70 s storm at every
-  boot that blocked one udev worker (``usb3: Worker … taking a long time``)
-  and delayed boot that long; `hci0` never appeared. Setting the BIOS power
-  mode to **performance** fixed enumeration (device ready ~1.7 s after boot,
-  `hci0` present). If a BIOS reset reverts the power mode, expect the storm
-  back — the fix is the BIOS setting, not any OS config
+- ⚠ **Internal Bluetooth USB function intermittently failed enumeration**
+  (seen 2026-09-07, not since). Port 3-5 of root hub `usb3` (xHCI at PCI
+  `c8:00.0`) is the **USB-facing Bluetooth radio of the MT7925 Wi-Fi/BT
+  combo card** (`0e8d:0717 “Wireless_Device”, MediaTek Inc.`) — an
+  *internal* connection, not an external port. On several boots it presented
+  but never answered a descriptor read (`error -110`); the kernel
+  power-cycled the port and retried until `unable to enumerate` — a ~60–70 s
+  storm that blocked one udev worker (``usb3: Worker … taking a long
+  time``) and delayed boot that long, with no `hci0`. The storms happened
+  on the boots right after the `mt7xxx-firmware` deployment first took
+  effect (the BT radio had been through repeated firmware-failure retries
+  before that); after a BIOS session/real power cycle, three consecutive
+  boots enumerated cleanly (~1–2 s, `hci0` up) and two deliberate test
+  reboots stayed clean. The BIOS power mode was already “performance”
+  during the storming boots, so it is not the fix. Likely a latched
+  xHCI/radio state cleared by the power cycle (warm reboots do not clear
+  it) or a slow intermittent — **watch the first boot after any full
+  power-off**: `dmesg | grep "usb 3-5"`; a repeat is a case for CORSAIR
+  support, not OS config
 
 ## Hardware needing special drivers (summary)
 
