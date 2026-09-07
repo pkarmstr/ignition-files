@@ -266,6 +266,8 @@ ignition-files/
 ├── README.md                     # This file
 ├── AGENTS.md                     # Rules for AI agents working in this repo
 ├── HARDWARE.md                   # Hardware + stable drive identifiers (nevua-ketana)
+├── HARDWARE-hava-amina.md        # Hardware + stable drive identifiers (hava-amina; draft until provisioned)
+├── hava-amina.bu                 # Per-machine butane config (AMD, no NVIDIA: ucore-minimal, no storage/llama units)
 ├── nevua-ketana.bu               # Per-machine butane config
 ├── secrets.env (gitignored)      # Password hash + SSH public key, substituted into the .bu by butane.sh
 ├── llama-server.container        # Machine-specific: podman quadlet — pull-on-boot llama.cpp router (embedded via local:)

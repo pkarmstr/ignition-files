@@ -1,0 +1,103 @@
+variant: fcos
+version: 1.7.0
+
+passwd:
+  users:
+    - name: keelan
+      groups:
+        - wheel
+        - sudo
+      # Values come from the gitignored secrets.env next to this file;
+      # butane.sh substitutes them in before transpiling.
+      password_hash: ${USER_PASSWORD_HASH}
+      ssh_authorized_keys:
+        - ${USER_SSH_PUBLIC_KEY}
+
+storage:
+  directories:
+    - path: /etc/ucore-autorebase
+      mode: 0755
+
+  files:
+    # Machine-specific: hostname (hava-amina)
+    - path: /etc/hostname
+      mode: 0644
+      overwrite: true
+      contents:
+        inline: hava-amina
+
+systemd:
+  units:
+
+    # --- Generic: uCore autorebase chain ---
+    # Runs across 2 boots: unsigned rebase → reboot → signed rebase → reboot
+    # After both complete, these units are disabled and never run again.
+    # Plain 'stable' tag: AMD box, no NVIDIA driver needed.
+
+    - name: ucore-unsigned-autorebase.service
+      enabled: true
+      contents: |
+        [Unit]
+        Description=uCore autorebase to unsigned OCI and reboot
+        ConditionPathExists=!/etc/ucore-autorebase/unverified
+        ConditionPathExists=!/etc/ucore-autorebase/signed
+        After=network-online.target
+        Wants=network-online.target
+
+        [Service]
+        Type=oneshot
+        StandardOutput=journal+console
+        ExecStart=/usr/bin/rpm-ostree rebase --bypass-driver ostree-unverified-registry:ghcr.io/ublue-os/ucore-minimal:stable
+        ExecStart=/usr/bin/touch /etc/ucore-autorebase/unverified
+        ExecStart=/usr/bin/systemctl disable ucore-unsigned-autorebase.service
+        ExecStart=/usr/bin/systemctl reboot
+
+        [Install]
+        WantedBy=multi-user.target
+
+    - name: ucore-signed-autorebase.service
+      enabled: true
+      contents: |
+        [Unit]
+        Description=uCore autorebase to signed OCI and reboot
+        ConditionPathExists=/etc/ucore-autorebase/unverified
+        ConditionPathExists=!/etc/ucore-autorebase/signed
+        After=network-online.target
+        Wants=network-online.target
+
+        [Service]
+        Type=oneshot
+        StandardOutput=journal+console
+        ExecStart=/usr/bin/rpm-ostree rebase --bypass-driver ostree-image-signed:docker://ghcr.io/ublue-os/ucore-minimal:stable
+        ExecStart=/usr/bin/touch /etc/ucore-autorebase/signed
+        ExecStart=/usr/bin/systemctl disable ucore-signed-autorebase.service
+        ExecStart=/usr/bin/systemctl reboot
+
+        [Install]
+        WantedBy=multi-user.target
+
+    # --- Generic: package installation ---
+    # Waits for signed rebase to complete (avoids race condition).
+    # Reboots once after installing, then disables itself.
+
+    - name: install-user-packages.service
+      enabled: true
+      contents: |
+        [Unit]
+        Description=Install user packages via rpm-ostree
+        ConditionPathExists=/etc/ucore-autorebase/signed
+        ConditionPathExists=!/var/lib/install-user-packages.done
+        After=network-online.target
+        Wants=network-online.target
+
+        [Service]
+        Type=oneshot
+        RemainAfterExit=yes
+        StandardOutput=journal+console
+        ExecStart=/usr/bin/rpm-ostree install neovim tmux tree btop
+        ExecStart=/usr/bin/touch /var/lib/install-user-packages.done
+        ExecStart=/usr/bin/systemctl disable install-user-packages.service
+        ExecStart=/usr/bin/systemctl reboot
+
+        [Install]
+        WantedBy=multi-user.target
