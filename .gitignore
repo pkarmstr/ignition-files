@@ -1,4 +1,5 @@
-# Generated Ignition configs — derive from the .bu via ./butane.sh
+# Generated Ignition configs — derive from config.bu via ./butane.sh
+builds/
 *.ign
 
 # Secrets substituted into the .bu by butane.sh (password hash, SSH public key)

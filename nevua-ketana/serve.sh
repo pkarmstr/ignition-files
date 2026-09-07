@@ -6,7 +6,7 @@
 #
 set -u
 
-IGNITION_DIR="/mnt/storage/ignition-files/nevua-ketana"
+IGNITION_DIR="/mnt/storage/ignition-files/builds"
 MODELS_DIR="/mnt/storage/nevua-ketana-backup/20tb-hdd/llama-models"
 
 # One server in the foreground, one in the background, and the trap reaps the

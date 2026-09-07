@@ -5,9 +5,9 @@ Provisioning configs for FCOS (Fedora CoreOS) machines using [Butane](https://co
 ## Quick Start
 
 ```bash
-# Transpile a .bu file into an .ign file
+# Transpile a machine's config.bu into builds/<machine>.ign
 # ('--strict' is added automatically by butane.sh)
-./butane.sh nevua-ketana/nevua-ketana.bu nevua-ketana/nevua-ketana.ign
+./butane.sh nevua-ketana
 
 # Secrets (the password hash and SSH public key) are NOT in the .bu. They live
 # in a gitignored 'secrets.env' next to the .bu and are substituted into a
@@ -16,15 +16,15 @@ Provisioning configs for FCOS (Fedora CoreOS) machines using [Butane](https://co
 #   USER_SSH_PUBLIC_KEY='ssh-rsa ...'
 
 # 'local:' file references (embedded scripts, config files) are resolved
-# relative to the *input .bu file's directory*. butane.sh passes --files-dir
-# to the container automatically — don't pass it yourself.
+# relative to the machine directory. butane.sh passes --files-dir to the
+# container automatically — don't pass it yourself.
 
-# Pass any butane args before the input/output files
-./butane.sh --pretty nevua-ketana/nevua-ketana.bu nevua-ketana/nevua-ketana.ign
+# Pass any butane args before the machine directory
+./butane.sh --pretty nevua-ketana
 
 # The butane image is pinned for reproducibility (default:
 # quay.io/coreos/butane:v0.29.0). Override with the BUTANE_IMAGE env var:
-BUTANE_IMAGE=quay.io/coreos/butane:v0.30.0 ./butane.sh nevua-ketana/nevua-ketana.bu nevua-ketana/nevua-ketana.ign
+BUTANE_IMAGE=quay.io/coreos/butane:v0.30.0 ./butane.sh nevua-ketana
 ```
 
 ## Installing onto a machine
@@ -34,12 +34,12 @@ started by hand, and each has to be up when the step that needs it runs:
 
 | Served directory | Port | Fetched by | When it must be running |
 |---|---|---|---|
-| the machine folder (e.g. `nevua-ketana/`) | 33333 | `coreos-installer --ignition-url` (the `.ign`) | during the install |
+| `builds/` (the generated `.ign` files) | 33333 | `coreos-installer --ignition-url` (the `.ign`) | during the install |
 | `/mnt/storage/nevua-ketana-backup/20tb-hdd/llama-models` | 33334 | `fetch-models.service` (boot 4) | from the first boot of the installed system |
 
 ```bash
-./butane.sh nevua-ketana/nevua-ketana.bu nevua-ketana/nevua-ketana.ign   # regenerate the .ign first
-./nevua-ketana/serve.sh                                   # both servers, one foreground process
+./butane.sh nevua-ketana      # regenerate the .ign first
+./nevua-ketana/serve.sh       # both servers, one foreground process
 ```
 
 `serve.sh` runs the two `python3 -m http.server` commands and stops both on
@@ -261,11 +261,12 @@ plus ~40 s before the next request is answered.
 
 ```
 ignition-files/
-├── butane.sh                     # Transpilation wrapper
+├── butane.sh                     # Transpilation wrapper: ./butane.sh <machine-dir>
+├── builds/ (gitignored)          # Generated .ign files, one per machine
 ├── README.md                     # This file
 ├── AGENTS.md                     # Rules for AI agents working in this repo
-├── nevua-ketana/                 # One folder per machine: .bu + its helper files + HARDWARE.md
-│   ├── nevua-ketana.bu           # Per-machine butane config
+├── nevua-ketana/                 # One folder per machine: config.bu + its helper files + HARDWARE.md
+│   ├── config.bu                 # Per-machine butane config
 │   ├── secrets.env (gitignored)  # Password hash + SSH public key, substituted into the .bu by butane.sh
 │   ├── HARDWARE.md               # Hardware + stable drive identifiers
 │   ├── serve.sh                  # Run by hand: the two HTTP servers an install needs from this machine
@@ -275,7 +276,7 @@ ignition-files/
 │   ├── setup-storage.sh          # Machine-specific: wipes the 2 data disks, LVM cache setup (embedded verbatim as /usr/local/bin/setup-storage.sh)
 │   └── teardown-storage.sh       # Machine-specific: destroys the volume again (run by hand, not embedded)
 └── hava-amina/                   # AMD box, no NVIDIA: ucore-minimal, no storage/llama units
-    ├── hava-amina.bu             # Per-machine butane config
+    ├── config.bu                 # Per-machine butane config
     ├── secrets.env (gitignored)  # Same as above
     └── HARDWARE.md               # Hardware + stable drive identifiers (draft until provisioned)
 ```
@@ -291,7 +292,7 @@ Butane has no `include` or inheritance mechanism. Any composability requires cus
 
 ## Adding a New Machine
 
-1. Make a `<name>/` folder and copy an existing machine's `.bu` (and the
+1. Make a `<name>/` folder and copy an existing machine's `config.bu` (and the
    helper files it embeds) in as a starting point
 2. Create a `secrets.env` next to the new `.bu` with the machine's
    `USER_PASSWORD_HASH` and `USER_SSH_PUBLIC_KEY` (the `.bu` carries
@@ -307,7 +308,7 @@ Butane has no `include` or inheritance mechanism. Any composability requires cus
    a new box's model set is a `FILES` edit plus a `llama-server-config.ini`
    edit, never an Ignition edit.
 5. Remove any units/files that don't apply to the new machine.
-6. Transpile: `./butane.sh new-machine/new-machine.bu new-machine/new-machine.ign`
+6. Transpile: `./butane.sh new-machine` (writes `builds/new-machine.ign`)
 
 ## Butane/Ignition Basics
 

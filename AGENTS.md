@@ -3,7 +3,7 @@
 This repo holds custom Butane configs for my personal hardware, so I get simple,
 stable, reproducible builds with Fedora CoreOS.
 
-One folder per machine (`nevua-ketana/`, `hava-amina/`) holds the `.bu`, its
+One folder per machine (`nevua-ketana/`, `hava-amina/`) holds `config.bu`, its
 embedded helper files, a gitignored `secrets.env`, and the machine's
 `HARDWARE.md` (stable drive identifiers). `README.md` documents the boot
 sequence, file layout, and Ignition behavior. Read those before changing
@@ -24,12 +24,12 @@ hardware; a script that names the disks fails loudly.
 ## Build
 
 ```bash
-./butane.sh nevua-ketana/nevua-ketana.bu nevua-ketana/nevua-ketana.ign    # --strict is added automatically
+./butane.sh nevua-ketana    # builds/nevua-ketana.ign; --strict is added automatically
 ```
 
-`.ign` files are generated artifacts (gitignored) — never hand-edit them, edit
-the `.bu` and re-run the command. Rebuild after any `.bu` or embedded-file
-change so the artifact in the tree isn't stale.
+`.ign` files are generated artifacts (gitignored, in `builds/`) — never
+hand-edit them, edit the `.bu` and re-run the command. Rebuild after any
+`.bu` or embedded-file change so the artifact isn't stale.
 
 ## Naming
 

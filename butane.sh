@@ -5,74 +5,81 @@ set -euo pipefail
 # Pinned for reproducibility; override with the BUTANE_IMAGE env var if needed.
 BUTANE_IMAGE="${BUTANE_IMAGE:-quay.io/coreos/butane:v0.29.0}"
 
+BUILD_DIR="builds"
+
 usage() {
   cat <<EOF
-Usage: $0 [butane-args...] <input.bu> <output.ign>
+Usage: $0 [butane-args...] <machine-dir>
 
-Transpiles a Butane (.bu) file into an Ignition (.ign) file using the butane
-container image (default: $BUTANE_IMAGE; override with the BUTANE_IMAGE
+Transpiles <machine-dir>/config.bu into $BUILD_DIR/<machine-dir>.ign using the
+butane container image (default: $BUTANE_IMAGE; override with the BUTANE_IMAGE
 environment variable).
 
-All arguments before the input/output files are passed through to butane.
+All arguments before the machine directory are passed through to butane.
 '--strict' is added automatically unless you already pass it.
 
 Secrets (\${USER_PASSWORD_HASH}, \${USER_SSH_PUBLIC_KEY}) are not committed in
-the .bu: they are read from a gitignored 'secrets.env' in the .bu's directory
-and substituted into a temp copy before transpiling.
-'--files-dir' is managed by this script: it is set to the input file's
-directory, so 'local:' references in the .bu resolve relative to the .bu
-file. Do not pass --files-dir yourself.
+the .bu: they are read from a gitignored 'secrets.env' in the machine
+directory and substituted into a temp copy before transpiling.
+'--files-dir' is managed by this script: it is set to the machine
+directory, so 'local:' references in the .bu resolve relative to it.
+Do not pass --files-dir yourself.
 
-The working directory is mounted into the container read-only, so the input
-path must be relative to the working directory (no absolute paths, no '..').
+The working directory is mounted into the container read-only, so the
+machine directory must be relative to the working directory
+(no absolute paths, no '..').
 
 Examples:
-  $0 config.bu config.ign
-  $0 --pretty config.bu config.ign
+  $0 nevua-ketana
+  $0 --pretty nevua-ketana
 EOF
   exit 1
 }
 
 if ! command -v docker >/dev/null 2>&1; then
   echo "Error: 'docker' not found in PATH." >&2
-  echo "Install docker (or provide a 'docker' shim, e.g. 'podman docker') and try again." >&2
+  echo "Install docker (or provide a 'docker' shim, e.g. 'podman docker') and try again."
   exit 1
 fi
 
-# Need at least 2 args (input + output)
-if [ $# -lt 2 ]; then
+# Need at least 1 arg (machine dir)
+if [ $# -lt 1 ]; then
   usage
 fi
 
-# Last two args are input and output files
-OUTPUT_FILE="${@: -1}"
-INPUT_FILE="${@: -2:1}"
-BUTANE_ARGS=("${@:1:$(($#-2))}")
+# Last arg is the machine directory; everything before it goes to butane.
+MACHINE_DIR="${@: -1}"
+BUTANE_ARGS=("${@:1:$(($#-1))}")
 
-# The input is mounted at /cwd/<INPUT_FILE>, so reject paths that break
-# that mapping: absolute paths and path traversal.
-case "$INPUT_FILE" in
+# The machine dir is mounted at /cwd/<MACHINE_DIR>, so reject paths that
+# break that mapping: absolute paths and path traversal.
+case "$MACHINE_DIR" in
   /*)
-    echo "Error: input path '$INPUT_FILE' must be relative to the working directory." >&2
+    echo "Error: machine dir '$MACHINE_DIR' must be relative to the working directory." >&2
     exit 1
     ;;
   .. | ../* | */.. | */../*)
-    echo "Error: input path '$INPUT_FILE' must not contain '..'." >&2
+    echo "Error: machine dir '$MACHINE_DIR' must not contain '..'." >&2
     exit 1
     ;;
 esac
 
-# Check input exists
+if [ ! -d "$MACHINE_DIR" ]; then
+  echo "Error: machine dir '$MACHINE_DIR' not found." >&2
+  exit 1
+fi
+
+INPUT_FILE="$MACHINE_DIR/config.bu"
+OUTPUT_FILE="$BUILD_DIR/${MACHINE_DIR%/}.ign"
 if [ ! -f "$INPUT_FILE" ]; then
-  echo "Error: Input file '$INPUT_FILE' not found." >&2
+  echo "Error: '$INPUT_FILE' not found. Each machine dir needs a config.bu." >&2
   exit 1
 fi
 
 # Secrets are substituted into a temp copy of the .bu so the committed file
 # never contains them. The copy lives next to the original so 'local:' file
 # references (resolved via --files-dir) still resolve.
-INPUT_DIR="$(dirname "$INPUT_FILE")"
-SECRETS_FILE="$INPUT_DIR/secrets.env"
+SECRETS_FILE="$MACHINE_DIR/secrets.env"
 if [ ! -f "$SECRETS_FILE" ]; then
   echo "Error: secrets file '$SECRETS_FILE' not found." >&2
   echo "Create it with USER_PASSWORD_HASH and USER_SSH_PUBLIC_KEY (see README)." >&2
@@ -91,7 +98,7 @@ for var in $SECRETS_VARS; do
   export "$var"
 done
 
-TMP_BU="$INPUT_DIR/.${INPUT_FILE##*/}.resolved"
+TMP_BU="$MACHINE_DIR/.config.bu.resolved"
 TMP_OUT="$(mktemp)"
 trap 'rm -f "$TMP_OUT" "$TMP_BU"' EXIT
 
@@ -117,14 +124,15 @@ if [ "$strict" -eq 0 ]; then
   BUTANE_ARGS+=("--strict")
 fi
 
+mkdir -p "$BUILD_DIR"
 echo "Transpiling '$INPUT_FILE' into '$OUTPUT_FILE'..."
 echo "Image: $BUTANE_IMAGE"
-echo "Args: ${BUTANE_ARGS[*]:-<none>} --files-dir /cwd/$INPUT_DIR"
+echo "Args: ${BUTANE_ARGS[*]:-<none>} --files-dir /cwd/$MACHINE_DIR"
 
 # Write to a temp file first so a failed run never leaves a truncated/empty
 # .ign behind.
 if ! docker run --rm -v "$(pwd):/cwd:ro" "$BUTANE_IMAGE" \
-    "${BUTANE_ARGS[@]}" --files-dir "/cwd/$INPUT_DIR" "/cwd/$TMP_BU" > "$TMP_OUT"; then
+    "${BUTANE_ARGS[@]}" --files-dir "/cwd/$MACHINE_DIR" "/cwd/$TMP_BU" > "$TMP_OUT"; then
   echo "Error: butane transpilation failed (see docker output above)." >&2
   exit 1
 fi
