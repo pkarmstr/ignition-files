@@ -59,8 +59,8 @@ good output. Be suspicious only when a fresh install fails without explanation.
 
 ## Machines
 
-`nevua-ketana` is assigned `192.168.0.45`. `hava-amina` is the AMD box (no
-NVIDIA); its IP is not assigned yet. If an install fails, SSH in as
+`nevua-ketana` is assigned `192.168.0.45`, `hava-amina` `192.168.0.46`
+(the AMD box, no NVIDIA). If an install fails, SSH in as
 `keelan` to see what happened, inspect logs, and run tests.
 
 The data-disk scripts are destructive: `setup-storage.sh` wipes both data disks

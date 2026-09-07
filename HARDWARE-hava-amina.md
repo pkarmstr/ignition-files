@@ -2,6 +2,7 @@
 type: Hardware Reference
 title: "hava-amina hardware reference"
 description: Physical hardware inventory and stable drive/device identifiers for the hava-amina AMD system, for reproducible Ignition builds.
+resource: ssh://keelan@192.168.0.46/
 tags: [hardware, hardware-reference, ignition, fedora-coreos, storage, drives, amd]
 status: draft
 ---
