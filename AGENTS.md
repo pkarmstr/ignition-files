@@ -3,10 +3,11 @@
 This repo holds custom Butane configs for my personal hardware, so I get simple,
 stable, reproducible builds with Fedora CoreOS.
 
-`README.md` documents the boot sequence, file layout, and Ignition behavior.
-`HARDWARE.md` is the hardware and stable drive-identifier reference for
-`nevua-ketana`. Read those before changing anything; keep this file short and
-non-overlapping with them.
+One folder per machine (`nevua-ketana/`, `hava-amina/`) holds the `.bu`, its
+embedded helper files, a gitignored `secrets.env`, and the machine's
+`HARDWARE.md` (stable drive identifiers). `README.md` documents the boot
+sequence, file layout, and Ignition behavior. Read those before changing
+anything; keep this file short and non-overlapping with them.
 
 ## Guiding principles
 
@@ -16,14 +17,14 @@ and how do I make that reproducible and stable?" Aim for simplicity and
 customization over generality.
 
 Never compute disk IDs, sizes, or sector sizes at runtime. Hard-code them —
-"we know this drive has this ID and this sector size" — from `HARDWARE.md`. A
+"we know this drive has this ID and this sector size" — from the machine's `HARDWARE.md`. A
 script that discovers its own target disks fails silently on different
 hardware; a script that names the disks fails loudly.
 
 ## Build
 
 ```bash
-./butane.sh nevua-ketana.bu nevua-ketana.ign    # --strict is added automatically
+./butane.sh nevua-ketana/nevua-ketana.bu nevua-ketana/nevua-ketana.ign    # --strict is added automatically
 ```
 
 `.ign` files are generated artifacts (gitignored) — never hand-edit them, edit

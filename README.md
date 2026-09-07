@@ -7,7 +7,7 @@ Provisioning configs for FCOS (Fedora CoreOS) machines using [Butane](https://co
 ```bash
 # Transpile a .bu file into an .ign file
 # ('--strict' is added automatically by butane.sh)
-./butane.sh nevua-ketana.bu nevua-ketana.ign
+./butane.sh nevua-ketana/nevua-ketana.bu nevua-ketana/nevua-ketana.ign
 
 # Secrets (the password hash and SSH public key) are NOT in the .bu. They live
 # in a gitignored 'secrets.env' next to the .bu and are substituted into a
@@ -20,11 +20,11 @@ Provisioning configs for FCOS (Fedora CoreOS) machines using [Butane](https://co
 # to the container automatically — don't pass it yourself.
 
 # Pass any butane args before the input/output files
-./butane.sh --pretty nevua-ketana.bu nevua-ketana.ign
+./butane.sh --pretty nevua-ketana/nevua-ketana.bu nevua-ketana/nevua-ketana.ign
 
 # The butane image is pinned for reproducibility (default:
 # quay.io/coreos/butane:v0.29.0). Override with the BUTANE_IMAGE env var:
-BUTANE_IMAGE=quay.io/coreos/butane:v0.30.0 ./butane.sh nevua-ketana.bu nevua-ketana.ign
+BUTANE_IMAGE=quay.io/coreos/butane:v0.30.0 ./butane.sh nevua-ketana/nevua-ketana.bu nevua-ketana/nevua-ketana.ign
 ```
 
 ## Installing onto a machine
@@ -34,12 +34,12 @@ started by hand, and each has to be up when the step that needs it runs:
 
 | Served directory | Port | Fetched by | When it must be running |
 |---|---|---|---|
-| this repo directory | 33333 | `coreos-installer --ignition-url` (the `.ign`) | during the install |
+| the machine folder (e.g. `nevua-ketana/`) | 33333 | `coreos-installer --ignition-url` (the `.ign`) | during the install |
 | `/mnt/storage/nevua-ketana-backup/20tb-hdd/llama-models` | 33334 | `fetch-models.service` (boot 4) | from the first boot of the installed system |
 
 ```bash
-./butane.sh nevua-ketana.bu nevua-ketana.ign   # regenerate the .ign first
-./serve.sh                                     # both servers, one foreground process
+./butane.sh nevua-ketana/nevua-ketana.bu nevua-ketana/nevua-ketana.ign   # regenerate the .ign first
+./nevua-ketana/serve.sh                                   # both servers, one foreground process
 ```
 
 `serve.sh` runs the two `python3 -m http.server` commands and stops both on
@@ -262,20 +262,22 @@ plus ~40 s before the next request is answered.
 ```
 ignition-files/
 ├── butane.sh                     # Transpilation wrapper
-├── serve.sh                      # Run by hand: the two HTTP servers an install needs from this machine
 ├── README.md                     # This file
 ├── AGENTS.md                     # Rules for AI agents working in this repo
-├── HARDWARE.md                   # Hardware + stable drive identifiers (nevua-ketana)
-├── HARDWARE-hava-amina.md        # Hardware + stable drive identifiers (hava-amina; draft until provisioned)
-├── hava-amina.bu                 # Per-machine butane config (AMD, no NVIDIA: ucore-minimal, no storage/llama units)
-├── nevua-ketana.bu               # Per-machine butane config
-├── secrets.env (gitignored)      # Password hash + SSH public key, substituted into the .bu by butane.sh
-├── llama-server.container        # Machine-specific: podman quadlet — pull-on-boot llama.cpp router (embedded via local:)
-├── llama-server-config.ini       # llama.cpp router preset INI — fetched into the model tree by fetch-models.sh; the repo copy is the record, not an input
-├── llama-server-firewall.service # Machine-specific: firewalld rule for port 8001 (embedded via local:)
-├── fetch-models.sh               # Machine-specific: pulls the model files from erevrav onto the volume (embedded verbatim as /usr/local/bin/fetch-models.sh)
-├── setup-storage.sh              # Machine-specific: wipes the 2 data disks, LVM cache setup (embedded verbatim as /usr/local/bin/setup-storage.sh)
-└── teardown-storage.sh           # Machine-specific: destroys the volume again (run by hand, not embedded)
+├── nevua-ketana/                 # One folder per machine: .bu + its helper files + HARDWARE.md
+│   ├── nevua-ketana.bu           # Per-machine butane config
+│   ├── secrets.env (gitignored)  # Password hash + SSH public key, substituted into the .bu by butane.sh
+│   ├── HARDWARE.md               # Hardware + stable drive identifiers
+│   ├── serve.sh                  # Run by hand: the two HTTP servers an install needs from this machine
+│   ├── llama-server.container    # Machine-specific: podman quadlet — pull-on-boot llama.cpp router (embedded via local:)
+│   ├── llama-server-firewall.service # Machine-specific: firewalld rule for port 8001 (embedded via local:)
+│   ├── fetch-models.sh           # Machine-specific: pulls the model files from erevrav onto the volume (embedded verbatim as /usr/local/bin/fetch-models.sh)
+│   ├── setup-storage.sh          # Machine-specific: wipes the 2 data disks, LVM cache setup (embedded verbatim as /usr/local/bin/setup-storage.sh)
+│   └── teardown-storage.sh       # Machine-specific: destroys the volume again (run by hand, not embedded)
+└── hava-amina/                   # AMD box, no NVIDIA: ucore-minimal, no storage/llama units
+    ├── hava-amina.bu             # Per-machine butane config
+    ├── secrets.env (gitignored)  # Same as above
+    └── HARDWARE.md               # Hardware + stable drive identifiers (draft until provisioned)
 ```
 
 Each `.bu` file is self-contained. Within each file, sections are tagged as **generic** or **machine-specific** via comments:
@@ -289,7 +291,8 @@ Butane has no `include` or inheritance mechanism. Any composability requires cus
 
 ## Adding a New Machine
 
-1. Copy an existing `.bu` file as a starting point
+1. Make a `<name>/` folder and copy an existing machine's `.bu` (and the
+   helper files it embeds) in as a starting point
 2. Create a `secrets.env` next to the new `.bu` with the machine's
    `USER_PASSWORD_HASH` and `USER_SSH_PUBLIC_KEY` (the `.bu` carries
    `${...}` placeholders; butane.sh substitutes them at transpile time)
@@ -304,7 +307,7 @@ Butane has no `include` or inheritance mechanism. Any composability requires cus
    a new box's model set is a `FILES` edit plus a `llama-server-config.ini`
    edit, never an Ignition edit.
 5. Remove any units/files that don't apply to the new machine.
-6. Transpile: `./butane.sh new-machine.bu new-machine.ign`
+6. Transpile: `./butane.sh new-machine/new-machine.bu new-machine/new-machine.ign`
 
 ## Butane/Ignition Basics
 
