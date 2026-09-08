@@ -29,48 +29,58 @@ BUTANE_IMAGE=quay.io/coreos/butane:v0.30.0 ./butane.sh nevua-ketana
 
 ## Installing onto a machine
 
-Two HTTP servers have to run on this machine (erevrav, `192.168.0.24`). Both are
-started by hand, and each has to be up when the step that needs it runs:
+The generated `.ign` is served over plain HTTP from this machine (erevrav,
+`192.168.0.24`), started by hand and kept up while the step that needs it runs:
 
 | Served directory | Port | Fetched by | When it must be running |
 |---|---|---|---|
-| `builds/` (the generated `.ign` files) | 33333 | `coreos-installer --ignition-url` (the `.ign`) | during the install |
-| `/mnt/storage/nevua-ketana-backup/20tb-hdd/llama-models` | 33334 | `fetch-models.service` (boot 4) | from the first boot of the installed system |
+| `builds/` (the generated `.ign` files) | 33333 | `coreos-installer --ignition-url` | during the install — either machine |
+| `/mnt/storage/nevua-ketana-backup/20tb-hdd/llama-models` | 33334 | `fetch-models.service` (boot 4) | from the first boot of a nevua-ketana install |
 
 ```bash
 ./butane.sh nevua-ketana      # regenerate the .ign first
-./nevua-ketana/serve.sh       # both servers, one foreground process
+./nevua-ketana/serve.sh       # both servers, one foreground process (nevua-ketana installs)
 ```
 
 `serve.sh` runs the two `python3 -m http.server` commands and stops both on
 Ctrl+C, so it lives happily in a tmux pane for the whole install. The two served
 directories are the two variables at the top of it — the model directory it
 serves is the layout under `/var/mnt/storage/llama-models`, so one path is both
-the URL and the destination.
+the URL and the destination. A hava-amina install needs only the first server:
+`python3 -m http.server 33333 -d builds` in a tmux pane is enough.
 
-Then boot the machine into the Fedora CoreOS live image and:
+Then boot the machine into the Fedora CoreOS live image and install onto the
+drive the machine's `HARDWARE.md` names as its OS drive. Use the by-id path,
+not the `nvmeNn1` name — the number can swap between boots, and on hava-amina
+the two drives are physically identical, so a wrong guess is destructive (its
+`.ign` wipes the storage drive on first boot):
+
+| Machine | Install target |
+|---|---|
+| nevua-ketana | `/dev/disk/by-id/nvme-PCIe_SSD_20090851200275` (the 512 GB NVMe) |
+| hava-amina | `/dev/disk/by-id/nvme-PCIe_SSD_511250820055001423` (M.2 slot 1; the `...1080` drive is its storage disk) |
 
 ```bash
-lsblk                      # find the drive name of the ~500 GB NVMe (nvme0n1 today)
-sudo coreos-installer install /dev/nvme0n1 \
-  --ignition-url http://192.168.0.24:33333/nevua-ketana.ign \
+sudo coreos-installer install <os drive by-id path> \
+  --ignition-url http://192.168.0.24:33333/<machine>.ign \
   --insecure-ignition
 sudo reboot
 ```
 
 `--insecure-ignition` is required because the config comes over plain HTTP.
-Everything after the install is automatic — see the boot sequence below. If the
-second server was not up when boot 4 ran, `fetch-models.service` fails without
-writing its marker; start the server and either reboot or run
-`sudo systemctl start fetch-models.service` (as root — the script needs it).
+Everything after the install is automatic — see the boot sequence below.
+(nevua-ketana only) If the second server was not up when boot 4 ran,
+`fetch-models.service` fails without writing its marker; start the server and
+either reboot or run `sudo systemctl start fetch-models.service` (as root — the
+script needs it).
 
-## Boot Sequence
+## Boot Sequence (nevua-ketana)
 
 Ignition runs **once** at first boot. It handles all `storage:` operations (creating directories, writing files) before any systemd unit starts. After that, systemd takes over.
 
 Ignition deliberately does **no** disk wiping here. `wipe_table` only clears the partition table and the signatures at the very start and end of a disk, and splitting the job across two systems makes the failure mode confusing. `setup-storage.sh` wipes both data disks with `wipefs --all` as its first step, so wiping and building live in one readable, testable file.
 
-The provisioning here is designed as a **3-reboot chain** — each step reboots and triggers the next — followed by a one-shot storage setup and model fetch on the boot that follows. The end state of that boot is a running llama.cpp server: a minimum viable system.
+The provisioning here is a **3-reboot rebase chain** — each step reboots and triggers the next — and on nevua-ketana a one-shot storage setup and model fetch follow it on the boot after. The end state of that boot is a running llama.cpp server: a minimum viable system.
 
 | Boot | Unit | What it does |
 |------|------|-------------|
