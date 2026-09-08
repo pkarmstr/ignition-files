@@ -1,0 +1,6 @@
+# Manual install, on the FCOS live image (http.server 33333 -d builds running on erevrav, 192.168.0.24)
+sudo dmesg -n 1                # only if the console is being spammed
+sudo coreos-installer install /dev/disk/by-id/nvme-PCIe_SSD_511250820055001423 \
+  --ignition-url http://192.168.0.24:33333/hava-amina.ign \
+  --insecure-ignition
+sudo reboot

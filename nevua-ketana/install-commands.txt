@@ -1,0 +1,5 @@
+# Manual install, on the FCOS live image (serve.py running on erevrav, 192.168.0.24)
+sudo coreos-installer install /dev/disk/by-id/nvme-PCIe_SSD_20090851200275 \
+  --ignition-url http://192.168.0.24:33333/nevua-ketana.ign \
+  --insecure-ignition
+sudo reboot
