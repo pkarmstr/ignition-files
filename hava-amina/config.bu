@@ -26,6 +26,19 @@ storage:
       contents:
         inline: hava-amina
 
+    # Machine-specific: WoL helper (hava-amina)
+    - path: /usr/local/bin/wol-enable.sh
+      mode: 0755
+      overwrite: true
+      contents:
+        inline: |
+          #!/bin/bash
+          set -euo pipefail
+          IFACE="eno1"
+          echo "Enabling Wake-on-LAN on $IFACE..."
+          ethtool -s "$IFACE" wol g
+          ethtool "$IFACE" | grep -i "wake-on"
+
 systemd:
   units:
 
@@ -72,6 +85,26 @@ systemd:
         ExecStart=/usr/bin/touch /etc/ucore-autorebase/signed
         ExecStart=/usr/bin/systemctl disable ucore-signed-autorebase.service
         ExecStart=/usr/bin/systemctl reboot
+
+        [Install]
+        WantedBy=multi-user.target
+
+    # --- Machine-specific: Wake-on-LAN (hava-amina) ---
+    # Runs at every boot. Enables WoL on the network interface.
+
+    - name: wol-enable.service
+      enabled: true
+      contents: |
+        [Unit]
+        Description=Enable Wake-on-LAN on eno1
+        ConditionPathExists=/sys/class/net/eno1
+        After=network-online.target
+        Wants=network-online.target
+
+        [Service]
+        Type=oneshot
+        RemainAfterExit=yes
+        ExecStart=/usr/local/bin/wol-enable.sh
 
         [Install]
         WantedBy=multi-user.target
