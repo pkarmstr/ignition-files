@@ -111,7 +111,8 @@ target.
 - **Fix (applied at capture):** `sudo rpm-ostree install mt7xxx-firmware` +
   reboot. The package is also in `install-user-packages.service` in
   `hava-amina.bu`, so a fresh install gets it automatically. Wi-Fi and
-  Bluetooth both work after this — the Bluetooth half had a separate,
+  Bluetooth both work after this (Wi-Fi interface is `wlp195s0` —
+  PCI-derived name, not `wlan0`). The Bluetooth half had a separate,
   now-resolved enumeration issue; see the USB section above.
 
 ## USB4 / Thunderbolt
@@ -126,8 +127,8 @@ target.
 - Working devices at capture: 4-port USB 2.0 hub (1-1) with a
   Winchiphead `USB2IIC_CTP_CONTROL` touch/I2C bridge (1-1.1) and a USB
   keyboard (1-1.3); 4-port USB 3.0 hub (2-1)
-- ⚠ **Internal Bluetooth USB function intermittently failed enumeration**
-  (seen 2026-09-07, not since). Port 3-5 of root hub `usb3` (xHCI at PCI
+- ⚠ **Internal Bluetooth USB function intermittently fails enumeration**
+  (seen 2026-09-07, twice — see recurrence note below). Port 3-5 of root hub `usb3` (xHCI at PCI
   `c8:00.0`) is the **USB-facing Bluetooth radio of the MT7925 Wi-Fi/BT
   combo card** (`0e8d:0717 “Wireless_Device”, MediaTek Inc.`) — an
   *internal* connection, not an external port. On several boots it presented
@@ -140,10 +141,30 @@ target.
   before that); after a BIOS session/real power cycle, three consecutive
   boots enumerated cleanly (~1–2 s, `hci0` up) and two deliberate test
   reboots stayed clean. The BIOS power mode was already “performance”
-  during the storming boots, so it is not the fix. Likely a latched
-  xHCI/radio state cleared by the power cycle (warm reboots do not clear
-  it) or a slow intermittent — **watch the first boot after any full
-  power-off**: `dmesg | grep "usb 3-5"`; a repeat is a case for CORSAIR
+  during the storming boots, so it is not the fix.
+- **Recurred on the 2026-09-07 fresh reinstall, with a clean timeline.**
+  Both no-firmware install boots (11 `Direct firmware load for mediatek`
+  failures each) storm; the storm then persisted across **three
+  consecutive warm reboots after `mt7xxx-firmware` was installed** —
+  zero firmware failures, yet `usb 3-5` still failed to enumerate every
+  boot and no `hci0`. Meanwhile **Wi-Fi (the PCIe half, `c3:00.0`) came
+  up normally every time** — only the USB/BT half is latched. Also seen
+  during the storm: `xhci_hcd 0000:c8:00.0: Timeout while waiting for
+  setup device command`. This is strong support for the latched-state
+  theory: a boot before the firmware is present wedges the radio and
+  warm reboots do not clear it. A full power-off (powered down, then
+  powered back on) cleared it: the next boot enumerated `usb 3-5`
+  instantly (~0 s, no retries) with `hci0` up. **Consequence for
+  future fresh installs:** after `mt7xxx-firmware` is first layered,
+  do a **full shutdown + power-on**, not a reboot — a reboot is not
+  enough, and expect no Bluetooth until the power cycle.
+- Benign boot noise seen on these installs, not related to the storm:
+  `faux_driver regulatory: Direct firmware load for regulatory.db failed`
+  (`wpa_supplicant` is not in `ucore-minimal`) and, on early boots,
+  `SELinux: Permission firmware_load in class system not defined in
+  policy`.
+- **Watch the first boot after any full power-off**: `dmesg | grep
+  "usb 3-5"`; a repeat after a genuine power cycle is a case for CORSAIR
   support, not OS config
 
 ## Hardware needing special drivers (summary)
