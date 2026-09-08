@@ -1,0 +1,14 @@
+[Unit]
+Description=Open firewall port 8001 for llama.cpp server
+Before=llama-server.service
+Requires=firewalld.service
+After=firewalld.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/bin/firewall-cmd --permanent --add-port=8001/tcp
+ExecStart=/usr/bin/firewall-cmd --reload
+
+[Install]
+WantedBy=multi-user.target

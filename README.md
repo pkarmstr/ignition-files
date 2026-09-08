@@ -35,7 +35,13 @@ The generated `.ign` is served over plain HTTP from this machine (erevrav,
 | Served directory | Port | Fetched by | When it must be running |
 |---|---|---|---|
 | `builds/` (the generated `.ign` files) | 33333 | `coreos-installer --ignition-url` | during the install — either machine |
-| `/mnt/storage/nevua-ketana-backup/20tb-hdd/llama-models` | 33334 | `fetch-models.service` (boot 4) | from the first boot of a nevua-ketana install |
+| `/mnt/storage/nevua-ketana-backup/20tb-hdd/llama-models` | 33334 | `fetch-models.service` (boot 4) | from the first boot of either machine's install |
+
+The model server is the shared model library: nevua-ketana's
+`fetch-models.sh` reads from its root (its preset INI is the tree root's
+`llama-server-config.ini`), while hava-amina's reads its preset from the
+`hava-amina/` subdirectory (its INI lives there on erevrav) and takes its model
+shards and chat template from the same shared paths.
 
 ```bash
 ./butane.sh nevua-ketana      # regenerate the .ign first
@@ -46,8 +52,7 @@ The generated `.ign` is served over plain HTTP from this machine (erevrav,
 Ctrl+C, so it lives happily in a tmux pane for the whole install. The two served
 directories are the two variables at the top of it — the model directory it
 serves is the layout under `/var/mnt/storage/llama-models`, so one path is both
-the URL and the destination. A hava-amina install needs only the first server:
-`python3 -m http.server 33333 -d builds` in a tmux pane is enough.
+the URL and the destination. Either machine's boot 4 needs both servers.
 
 Then boot the machine into the Fedora CoreOS live image and install onto the
 drive the machine's `HARDWARE.md` names as its OS drive. Use the by-id path,
@@ -98,7 +103,14 @@ storage step: its storage disk is wiped and formatted by Ignition itself on
 the first boot (`storage.disks` / `storage.filesystems` in the `.bu`), before
 any systemd unit runs. The only storage unit on that machine is the one-shot
 `storage-owner.service`, which sets the volume root's owner and SELinux label
-once (see the unit's comment in its `config.bu`).
+once (see the unit's comment in its `config.bu`). Boot 4 then runs
+`fetch-models.service` (the 24 GB Qwen3.8-27B Q6_K_XL, its chat template and
+the preset INI from the same erevrav model server, into
+`/var/mnt/storage/llama-models`) and starts `llama-server.service` — the
+Vulkan quadlet (`server-vulkan` image, `/dev/dri` + `/dev/kfd`, for the Strix
+Halo iGPU). Its `var-mnt-storage.mount` has no condition gate (the device
+always exists) and no same-boot remount race (no volume-creating service), so
+`fetch-models.sh` there has no mount wait loop.
 
 ### Why this ordering matters
 
@@ -298,10 +310,14 @@ ignition-files/
 │   ├── fetch-models.sh           # Machine-specific: pulls the model files from erevrav onto the volume (embedded verbatim as /usr/local/bin/fetch-models.sh)
 │   ├── setup-storage.sh          # Machine-specific: wipes the 2 data disks, LVM cache setup (embedded verbatim as /usr/local/bin/setup-storage.sh)
 │   └── teardown-storage.sh       # Machine-specific: destroys the volume again (run by hand, not embedded)
-└── hava-amina/                   # AMD box, no NVIDIA: ucore-minimal + whole-disk XFS storage, no llama units
+└── hava-amina/                   # Strix Halo (AMD iGPU, no NVIDIA): ucore-minimal + whole-disk XFS storage + Vulkan llama units
     ├── config.bu                 # Per-machine butane config (storage is declarative: storage.disks/filesystems + custom mount unit + one-shot ownership unit)
     ├── secrets.env (gitignored)  # Same as above
-    └── HARDWARE.md               # Hardware + stable drive identifiers
+    ├── HARDWARE.md               # Hardware + stable drive identifiers
+    ├── llama-server.container    # Machine-specific: podman quadlet — pull-on-boot llama.cpp router, server-vulkan + /dev/dri + /dev/kfd (embedded via local:)
+    ├── llama-server-firewall.service # Machine-specific: firewalld rule for port 8001 (embedded via local:)
+    ├── llama-server-config.ini   # The router preset this box serves (fetched over the model server, not embedded)
+    └── fetch-models.sh           # Machine-specific: pulls the model files from erevrav onto the volume (embedded verbatim as /usr/local/bin/fetch-models.sh)
 ```
 
 Each `.bu` file is self-contained. Within each file, sections are tagged as **generic** or **machine-specific** via comments:

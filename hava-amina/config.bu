@@ -63,6 +63,38 @@ storage:
           ethtool -s "$IFACE" wol g
           ethtool "$IFACE" | grep -i "wake-on"
 
+    # --- Machine-specific: model fetch script (hava-amina) ---
+    # /usr/local is a symlink to /var/usrlocal on CoreOS, so this path is
+    # writable and survives image upgrades/rebases. Only written here; it is
+    # executed once by fetch-models.service (see systemd.units below).
+    - path: /usr/local/bin/fetch-models.sh
+      mode: 0755
+      overwrite: true
+      contents:
+        local: fetch-models.sh
+
+    # --- llama.cpp server: Podman quadlet (Vulkan) ---
+    # The router's --models-preset INI is deliberately not seeded here: it lives
+    # in the model tree and arrives with fetch-models.sh, so nothing under /etc
+    # has to point at a volume that does not exist yet on the first boot.
+    # Pull-on-boot: the quadlet carries Pull=always, so every start re-resolves
+    # the server-vulkan tag and the box runs the newest llama.cpp build.
+    - path: /etc/containers/systemd/llama-server.container
+      mode: 0644
+      overwrite: true
+      contents:
+        local: llama-server.container
+
+    # --- llama.cpp server: firewalld rule for port 8001 ---
+    # NOTE: plain .service file, so it must live in /etc/systemd/system
+    # (systemd's unit search path). /etc/containers/systemd is only scanned
+    # by the podman quadlet generator for quadlet files.
+    - path: /etc/systemd/system/llama-server-firewall.service
+      mode: 0644
+      overwrite: true
+      contents:
+        local: llama-server-firewall.service
+
 systemd:
   units:
 
@@ -227,3 +259,61 @@ systemd:
 
         [Install]
         WantedBy=multi-user.target
+
+    # --- Machine-specific: seed the model files (hava-amina) ---
+    # A 24 GB GGUF cannot be embedded in an Ignition config, so the one model
+    # this box serves is pulled over the LAN once the rebase chain is done.
+    # Needs the model HTTP server on erevrav — see "Serving files over HTTP"
+    # (the 33334 server) in the README.
+    # Gated on install-user-packages' done marker, the end of the 3-boot rebase
+    # chain: the model fetch is the first thing on boot 4. No mount race here
+    # (unlike nevua-ketana's same-boot volume creation): Ignition formats the
+    # disk before any unit runs, so var-mnt-storage.mount is a normal member of
+    # every boot's transaction and After= orders this job after it for real.
+    # TimeoutStartSec: 24 GB on the LAN outruns the 90s default by minutes.
+    # The last ExecStart brings up the llama.cpp server on the *same* boot: the
+    # quadlet is gated on /var/lib/fetch-models.done, so its boot-time job was
+    # already skipped by then and --no-block just re-queues it (conditions are
+    # re-checked, and this time the marker exists).
+
+    - name: fetch-models.service
+      enabled: true
+      contents: |
+        [Unit]
+        Description=Fetch llama.cpp model files onto the storage volume (one-shot)
+        ConditionPathExists=/var/lib/install-user-packages.done
+        ConditionPathExists=!/var/lib/fetch-models.done
+        After=install-user-packages.service var-mnt-storage.mount network-online.target
+        Wants=network-online.target
+
+        [Service]
+        Type=oneshot
+        RemainAfterExit=yes
+        StandardOutput=journal+console
+        TimeoutStartSec=infinity
+        ExecStart=/usr/local/bin/fetch-models.sh
+        ExecStart=/usr/bin/touch /var/lib/fetch-models.done
+        ExecStart=/usr/bin/systemctl disable fetch-models.service
+        ExecStart=/usr/bin/systemctl --no-block start llama-server.service
+
+        [Install]
+        WantedBy=multi-user.target
+
+    # --- llama.cpp server: quadlet + firewall (hava-amina) ---
+    # The quadlet file (llama-server.container) generates the unit
+    # "llama-server.service" (the .container suffix is stripped), and that file
+    # owns the unit's enablement through its own [Install] + ConditionPathExists
+    # pair — see the comments in llama-server.container. Nothing has to be
+    # enabled or disabled from here for a unit a generator writes at boot; this
+    # entry only records that the name is taken.
+    # `enabled: false` here is a harmless no-op for the generated unit
+    # (Ignition's disable is skipped when the unit is not enabled).
+    # Because the unit pulls its image on every start, a boot with no registry
+    # makes podman fail immediately: the quadlet sets StartLimitIntervalSec=0 and
+    # RestartSec=15s so it retries forever instead of landing in failed.
+
+    - name: llama-server.service
+      enabled: false
+
+    - name: llama-server-firewall.service
+      enabled: true

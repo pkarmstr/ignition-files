@@ -1,0 +1,108 @@
+[Unit]
+Description=llama.cpp router server (Vulkan, Strix Halo iGPU)
+# Wait for the cached storage volume — the bind source below lives on it. Without
+# a real dependency podman happily bind-mounts an empty directory off the OS disk
+# and the --models-preset (and every model) silently disappears. RequiresMountsFor=
+# pulls in the native mount unit and orders after it:
+#   Requires=var-mnt-storage.mount + After=var-mnt-storage.mount
+# (the quadlet generator derives the same dependency from each Volume= host
+# path; naming it here keeps the intent visible and survives edits below).
+# It is a [Unit] key: in [Container] the generator rejects the file and NO unit
+# is generated.
+RequiresMountsFor=/var/mnt/storage
+# Hold off until the model files are actually on the volume. This unit is part
+# of every boot (see [Install] below); the condition is what keeps the boots
+# before the model fetch quiet — a condition skip is not a failure, so nothing
+# below ever crash-loops on an empty volume. fetch-models.service starts this
+# unit on the boot that writes that marker.
+ConditionPathExists=/var/lib/fetch-models.done
+# 0 disables systemd's start rate limit (default: 5 starts per 10s). With
+# Pull=always a boot without a network makes podman fail in well under a second,
+# so the default limit would put this unit in failed and it would never retry —
+# the box would come up with no server until someone ran systemctl manually.
+# Retrying forever is the intended behaviour: it self-heals when the network
+# returns. Do NOT add StartLimitBurst=0 as well; interval 0 is the switch.
+StartLimitIntervalSec=0
+
+[Container]
+# Vulkan build: the Strix Halo iGPU (Radeon 8050S/8060S) is driven by the host's
+# /dev/dri + /dev/kfd, not a GPU vendor runtime. Converted from the working
+# compose file on the other strix box, which also set these two env vars:
+# RADV_PERFTEST=boltzmann tells the radeon driver to stop capping its allocation
+# pool, and GGML_VK_FORCE_MAX_ALLOCATION tells llama.cpp to use the full heap —
+# the model plus a large ctx lives in the iGPU's unified memory, so it wants
+# the whole allocation pool, not the default cap.
+Image=ghcr.io/ggml-org/llama.cpp:server-vulkan
+ContainerName=llama-server
+# Pull on every start: the newest server-vulkan build is what runs after each
+# boot. Cost when nothing changed is one manifest check; cost when it did change
+# is a multi-GB pull inside the start job (see TimeoutStartSec).
+# The key is Pull=. podman 5.8 has NO ImageAutoPull and NO ImagePullPolicy in
+# quadlet; either one makes the generator reject the file and the unit vanishes
+# with only a journal line as evidence.
+Pull=always
+PublishPort=8001:8001/tcp
+# The model tree is the only bind: /models holds the models directly
+# (/models/Qwen3.8-27B-GGUF/...) and the preset INI at its root — one
+# directory is everything this server reads. Both are written by
+# fetch-models.sh before this unit may start (see the condition above).
+Volume=/var/mnt/storage/llama-models:/models:z
+# --models-preset is a ROUTER-mode flag: the INI's sections are the model IDs
+# clients ask for and the router loads/unloads child instances on demand
+# (GET /models, POST /models/load, POST /models/unload). The file lives in the
+# model tree rather than /etc because it is nothing but per-model settings that
+# name /models paths: it is fetched with the models, edited without sudo, and it
+# lands with the same rsync as the models it describes.
+# --models-max 1: the default is 4 simultaneous instances, which with a 24 GB
+# model plus a 262144 ctx on 124 GB of unified memory is a guaranteed thrash.
+# No --sleep-idle-seconds: a loaded model stays resident until it is unloaded by
+# hand (POST /models/unload) or the container restarts.
+# No quotes here: quadlet/systemd eats double quotes in Exec= and word-splits
+# expanded variables, so anything with spaces or JSON goes in the INI file.
+Exec=--models-preset /models/llama-server-config.ini --port 8001 --tools all --models-max 1
+# The whole iGPU: render + control nodes and the ROCm compute node. The strix
+# compose file passed the same two paths.
+AddDevice=/dev/dri
+AddDevice=/dev/kfd
+# /dev/kfd is outside podman's default SELinux device policy, so the container
+# runs unconfined — the same security_opt: label=disable the strix compose used.
+# The :z relabel of the model bind still happens; unconfined only affects the
+# container processes' view of /dev.
+SecurityLabelDisable=true
+Environment=RADV_PERFTEST=boltzmann
+Environment=GGML_VK_FORCE_MAX_ALLOCATION=1
+# Liveness only, and deliberately not fatal (no HealthOnFailure): /health is
+# answered by the router process and returns 200 even when no model is loaded,
+# so it proves the HTTP loop is alive. curl is in the image, wget is not.
+# Spaces here are fine (quadlet escapes them as \x20 in the generated unit).
+HealthCmd=curl -fsS http://127.0.0.1:8001/health
+HealthInterval=30s
+HealthTimeout=30s
+HealthRetries=3
+HealthStartPeriod=60s
+
+# Restart goes in [Service], NOT [Container]: the podman 5.8 quadlet
+# generator rejects Restart= in [Container] (unit is not generated).
+# "always" is systemd's equivalent of docker's "unless-stopped":
+# restarts on crash/exit, but not after an explicit `systemctl stop`.
+[Service]
+Restart=always
+# 15s, not the 100ms default: the retry has to be slow enough to look like
+# retrying (and to stay clear of any future rate limit), and a pull retry
+# hammering a registry at 10 Hz is not what anyone wants to explain.
+RestartSec=15s
+# The pull of Pull=always happens before conmon reports readiness, so
+# the 90s default can expire mid-download and systemd kills a perfectly healthy
+# start. Same choice as fetch-models.service's TimeoutStartSec=infinity.
+TimeoutStartSec=infinity
+
+# Enabled on every boot. The quadlet generator applies [Install] itself (which
+# is also why `systemctl enable`/`disable` refuse to work on generated units —
+# the generator writes the .wants symlink, there is no unit file to enable).
+# The thing that decides whether this service runs is the ConditionPathExists
+# above, not this section: without the model files there is nothing to serve,
+# and the unit is skipped until fetch-models.service has written its marker.
+# To run it by hand later:
+#   systemctl restart llama-server.service
+[Install]
+WantedBy=multi-user.target
