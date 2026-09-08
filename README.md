@@ -39,10 +39,10 @@ The generated `.ign` is served over plain HTTP from this machine (erevrav,
 
 ```bash
 ./butane.sh nevua-ketana      # regenerate the .ign first
-./nevua-ketana/serve.sh       # both servers, one foreground process (nevua-ketana installs)
+./serve.py                    # both servers, one foreground process (nevua-ketana installs)
 ```
 
-`serve.sh` runs the two `python3 -m http.server` commands and stops both on
+`serve.py` runs the two `http.server` instances in one process and stops both on
 Ctrl+C, so it lives happily in a tmux pane for the whole install. The two served
 directories are the two variables at the top of it — the model directory it
 serves is the layout under `/var/mnt/storage/llama-models`, so one path is both
@@ -285,6 +285,7 @@ plus ~40 s before the next request is answered.
 ```
 ignition-files/
 ├── butane.sh                     # Transpilation wrapper: ./butane.sh <machine-dir>
+├── serve.py                      # Run by hand: the two HTTP servers an install needs from this machine
 ├── builds/ (gitignored)          # Generated .ign files, one per machine
 ├── README.md                     # This file
 ├── AGENTS.md                     # Rules for AI agents working in this repo
@@ -292,7 +293,6 @@ ignition-files/
 │   ├── config.bu                 # Per-machine butane config
 │   ├── secrets.env (gitignored)  # Password hash + SSH public key, substituted into the .bu by butane.sh
 │   ├── HARDWARE.md               # Hardware + stable drive identifiers
-│   ├── serve.sh                  # Run by hand: the two HTTP servers an install needs from this machine
 │   ├── llama-server.container    # Machine-specific: podman quadlet — pull-on-boot llama.cpp router (embedded via local:)
 │   ├── llama-server-firewall.service # Machine-specific: firewalld rule for port 8001 (embedded via local:)
 │   ├── fetch-models.sh           # Machine-specific: pulls the model files from erevrav onto the volume (embedded verbatim as /usr/local/bin/fetch-models.sh)
