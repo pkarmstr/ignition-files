@@ -83,6 +83,13 @@ The provisioning here is designed as a **3-reboot chain** — each step reboots 
 | 4..N | `llama-server.service` | The quadlet (`llama-server.container`), enabled at every boot but **gated** on `/var/lib/fetch-models.done` — skipped, never failed, until the model exists. Pulls the `server-cuda13` tag on every start (0.6 s unchanged, 3.32 GB changed) |
 | N | `wol-enable.service` | Runs at **every** boot — enables Wake-on-LAN |
 
+`hava-amina` follows the same rebase chain (boots 1–3) but has no boot-4
+storage step: its storage disk is wiped and formatted by Ignition itself on
+the first boot (`storage.disks` / `storage.filesystems` in the `.bu`), before
+any systemd unit runs. The only storage unit on that machine is the one-shot
+`storage-owner.service`, which sets the volume root's owner and SELinux label
+once (see the unit's comment in its `config.bu`).
+
 ### Why this ordering matters
 
 The chain uses marker files (`/etc/ucore-autorebase/unverified`, `/etc/ucore-autorebase/signed`, `/var/lib/install-user-packages.done`) as conditions. Each unit checks for the previous marker before running, preventing race conditions.
@@ -100,6 +107,12 @@ FCOS has no `/etc/fstab` (and mutating one at runtime is an anti-pattern on an i
 - **`WantedBy=multi-user.target`, not `local-fs.target`,** together with `nofail` in `Options=`. `nofail` is swallowed by libmount (never reaches the kernel) but it drops systemd's automatic `Before=local-fs.target` ordering, so a missing or degraded volume can never stall the local-fs phase — `multi-user.target` only `Wants=` the mount, so a failed mount is a failed unit, not a hung boot. It also has to be `enabled` (with an `[Install]` section): systemd ≥ v257 no longer injects `local-fs.target Wants=<mount>`, so nothing pulls a mount unit in on its own.
 - **`x-systemd.*` options are fstab-only** (`x-systemd.device-timeout=`, `x-systemd.mount-timeout=`, `x-systemd.makefs`). `systemd.mount(5)` states they are ignored when written in a unit's `Options=`, which is why they are not used.
 - **`llama-server.container` depends on it** via `RequiresMountsFor=/var/mnt/storage`, so the container cannot start against an empty mount point (its `/models` bind source lives on the volume) and lose its `--models-preset`.
+- **hava-amina's `var-mnt-storage.mount`** follows the same nofail / multi-user
+  rules but has **no condition gate**: its disk is a plain whole-disk XFS volume
+  formatted by Ignition on the first boot, so the device exists whenever the
+  mount is attempted. It is written by hand rather than generated with
+  `with_mount_unit` for the same nofail reason (the unit butane generates is
+  `RequiredBy=local-fs.target` without nofail).
 - **Nothing above the mount is ordered against a same-boot remount.** `setup-storage.service` re-queues the mount with `--no-block` at the end of its own job, and an `After=` edge cannot order against a job that does not exist yet — the mount job in that boot's transaction was already skipped by the gate. Anything that writes to the volume on that same boot checks `mountpoint(8)` itself (that is what the wait loop at the top of `fetch-models.sh` is for).
 - **The volume root's owner *and* SELinux label are written once by `setup-storage.sh`**, not by the mount unit. Both are filesystem content (the XFS root inode), so writing them while the volume is empty and mounted is enough forever; `ls -ldZ /var/mnt/storage` shows them after any reboot. The label matters as much as the owner: `mkfs.xfs` stores no `security.selinux` xattr, so a freshly formatted root mounts as `unlabeled_t` instead of inheriting the mount point's `mnt_t`, and everything created under it inherits `unlabeled_t` too. From `keelan` that is invisible — `unconfined_t` is allowed `unlabeled_t` — but a confined domain (the container) is denied it, so the step `restorecon`s it. The mode stays `mkfs`' 0755: owner `rwx`, everyone else `r-x`.
 
@@ -275,10 +288,10 @@ ignition-files/
 │   ├── fetch-models.sh           # Machine-specific: pulls the model files from erevrav onto the volume (embedded verbatim as /usr/local/bin/fetch-models.sh)
 │   ├── setup-storage.sh          # Machine-specific: wipes the 2 data disks, LVM cache setup (embedded verbatim as /usr/local/bin/setup-storage.sh)
 │   └── teardown-storage.sh       # Machine-specific: destroys the volume again (run by hand, not embedded)
-└── hava-amina/                   # AMD box, no NVIDIA: ucore-minimal, no storage/llama units
-    ├── config.bu                 # Per-machine butane config
+└── hava-amina/                   # AMD box, no NVIDIA: ucore-minimal + whole-disk XFS storage, no llama units
+    ├── config.bu                 # Per-machine butane config (storage is declarative: storage.disks/filesystems + custom mount unit + one-shot ownership unit)
     ├── secrets.env (gitignored)  # Same as above
-    └── HARDWARE.md               # Hardware + stable drive identifiers (draft until provisioned)
+    └── HARDWARE.md               # Hardware + stable drive identifiers
 ```
 
 Each `.bu` file is self-contained. Within each file, sections are tagged as **generic** or **machine-specific** via comments:

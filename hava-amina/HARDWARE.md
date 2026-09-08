@@ -43,7 +43,12 @@ Two **identical** white-label 2 TB NVMe drives — same model string `PCIe SSD`
 same firmware `ERFM30.1`. Disambiguate **only by serial/EUI**; the model name
 tells you nothing. Both report 512-byte logical and physical sectors.
 
-### 1. Boot drive — 2 TB white-label NVMe (Phison PS5027-E27T)
+### 1. OS drive — 2 TB white-label NVMe (Phison PS5027-E27T)
+
+- **Install target.** The two drives are physically identical, so every
+  `coreos-installer` run must target *this* drive. The other one (`...1080`)
+  is wiped by the `storage:` section of `config.bu` on the first boot — an
+  install that lands the OS on it destroys the running system.
 
 - **Model string:** `PCIe SSD` (vendor: none)
 - **Serial:** `511250820055001423`
@@ -54,7 +59,7 @@ tells you nothing. Both report 512-byte logical and physical sectors.
   - `/dev/disk/by-id/nvme-PCIe_SSD_511250820055001423`
   - `/dev/disk/by-id/nvme-eui.00000000000000006479a7aeda2005be`
 
-### 2. Second 2 TB white-label NVMe (Phison PS5027-E27T)
+### 2. Storage drive — 2 TB white-label NVMe (Phison PS5027-E27T)
 
 - **Model string:** `PCIe SSD` (vendor: none)
 - **Serial:** `511250820055001080`
@@ -64,16 +69,17 @@ tells you nothing. Both report 512-byte logical and physical sectors.
 - by-id paths:
   - `/dev/disk/by-id/nvme-PCIe_SSD_511250820055001080`
   - `/dev/disk/by-id/nvme-eui.00000000000000006479a7aed5f0000e`
-- **Note:** at capture this drive already carried a single 1.9 TB
-  partition (`nvme1n1p1`) from before the install. If it is ever used for
-  storage, wipe and build it deliberately — do not assume it is clean.
+- **Storage disk.** As of the 2026-09-07 provisioning, `config.bu` wipes it
+  and formats it as a whole-disk XFS volume on the first boot (no partition
+  table); `var-mnt-storage.mount` mounts it at `/var/mnt/storage`. The 1.9 TB
+  partition (`nvme1n1p1`) it carried before the install is gone.
 
 ### Slot topology summary (for future disk-layout planning)
 
 | Location | PCI addr | Link | Drive |
 |---|---|---|---|
-| M.2 slot 1 | c4:00.0 | Gen4 x4 | white-label 2 TB — boot drive |
-| M.2 slot 2 | c5:00.0 | Gen4 x4 | white-label 2 TB |
+| M.2 slot 1 | c4:00.0 | Gen4 x4 | white-label 2 TB — OS drive (install target) |
+| M.2 slot 2 | c5:00.0 | Gen4 x4 | white-label 2 TB — storage drive (XFS, `/var/mnt/storage`) |
 
 Strix Halo exposes the M.2 slots through the SoC's GPP/USB4 bridges; there is
 no chipset-level M.2 and no SATA at all.
