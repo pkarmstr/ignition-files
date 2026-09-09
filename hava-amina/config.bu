@@ -1,6 +1,22 @@
 variant: fcos
 version: 1.7.0
 
+# Raise amdgpu's lockup watchdog from the 2 s default to 100 s. At long
+# context, one Vulkan compute submit on the Strix Halo iGPU (flash-attn +
+# MTP draft graphs, see llama-server-config.ini) legitimately outlives 2 s;
+# the kernel then resets the compute ring and llama-server crashes with
+# vk::Queue::submit: ErrorDeviceLost (llama.cpp #20515 / #21724). 100 s is
+# beyond any real job; a genuine hang is still caught by the 10-min TCO
+# watchdog. The parameter is read-only in /sys on current kernels, so the
+# cmdline is the only way to set it.
+kernel_arguments:
+  should_exist:
+    - amdgpu.lockup_timeout=100000
+    # Disable the IOMMU; the iGPU shares system memory directly.
+    - amd_iommu=off
+    # No cap on the GPU's visible address space (all of the unified memory).
+    - amdgpu.gttsize=-1
+
 passwd:
   users:
     - name: keelan

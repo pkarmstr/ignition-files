@@ -54,7 +54,7 @@ Volume=/var/mnt/storage/llama-models:/models:z
 # name /models paths: it is fetched with the models, edited without sudo, and it
 # lands with the same rsync as the models it describes.
 # --models-max 1: the default is 4 simultaneous instances, which with a 24 GB
-# model plus a 262144 ctx on 124 GB of unified memory is a guaranteed thrash.
+# model plus a 131072 ctx on 124 GB of unified memory is a guaranteed thrash.
 # No --sleep-idle-seconds: a loaded model stays resident until it is unloaded by
 # hand (POST /models/unload) or the container restarts.
 # No quotes here: quadlet/systemd eats double quotes in Exec= and word-splits
