@@ -40,7 +40,7 @@ The generated `.ign` is served over plain HTTP from this machine (erevrav,
 The model server is the shared model library: both machines take their model
 families from the flat family directories at its root, and each reads its
 preset INI from its machine-scoped subdirectory (`nevua-ketana/` and
-`hava-amina/`) — nevua-ketana's chat template is served from there too. The
+`hava-amina/`). The
 `llama-server-config.ini` at the tree root is an early hava-amina preset, now
 fetched by nothing.
 

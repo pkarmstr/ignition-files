@@ -13,14 +13,13 @@
 #   python3 -m http.server 33334 \
 #     --directory /mnt/storage/nevua-ketana-backup/20tb-hdd/llama-models
 #
-# The served tree is flat: one directory per model family at its root, and the
-# llama-server-config.ini at its root is a stale early preset fetched by
-# nothing. This machine nests the model families under models/ (that
-# directory, plus the preset INI at its root, is the whole input to the server
-# — which is why nothing is seeded into /etc), and its preset INI is
-# machine-scoped, served from the hava-amina/ subdirectory. So each fetch is a
-# pair — the URL path under the served directory and the destination path
-# under DEST_ROOT — not one string playing both roles. The model paths inside
+# The served tree is flat — one directory per model family at its root, whose
+# llama-server-config.ini is a stale early preset fetched by nothing — and
+# this machine nests the same families under models/, so one path string is
+# both the URL suffix and the suffix under DEST_ROOT/models. The preset INI
+# is the only exception: machine-scoped, served from the hava-amina/
+# subdirectory. That INI plus the models/ directory is the whole input to the
+# server, which is why nothing is seeded into /etc. The model paths inside
 # llama-server-config.ini are the destination paths with /llama-cpp in front.
 #
 # Only the model this machine actually serves is fetched here — one ~24 GB
@@ -44,11 +43,11 @@ MNT_POINT="/var/mnt/storage"          # must match var-mnt-storage.mount's Where
 DEST_ROOT="$MNT_POINT/llama-models"   # bind-mounted as /llama-cpp in llama-server.container
 OWNER="keelan"
 
-# Pairs of "URL path destination path" (relative to the served directory and
-# to $DEST_ROOT respectively; no path here contains a space).
+# Paths relative to the served directory; each is installed at the same path
+# under $DEST_ROOT/models.
 FILES=(
-  "Qwen3.8-27B-GGUF/Qwen3.8-27B-UD-Q6_K_XL.gguf models/Qwen3.8-27B-GGUF/Qwen3.8-27B-UD-Q6_K_XL.gguf"
-  "Qwen-Fixed-Chat-Templates/chat_template.jinja models/Qwen-Fixed-Chat-Templates/chat_template.jinja"
+  "Qwen3.8-27B-GGUF/Qwen3.8-27B-UD-Q6_K_XL.gguf"
+  "Qwen-Fixed-Chat-Templates/chat_template.jinja"
 )
 
 [ "$EUID" -eq 0 ] || { echo "Please run as root (sudo)." >&2; exit 1; }
@@ -88,20 +87,18 @@ curl --fail --location --silent --show-error \
 chown "$OWNER_UID:$OWNER_GID" "$DEST_ROOT/llama-server-config.ini"
 echo "Installed $DEST_ROOT/llama-server-config.ini"
 
-for entry in "${FILES[@]}"; do
-    url_rel="${entry%% *}"
-    dest_rel="${entry#* }"
-    dest="$DEST_ROOT/$dest_rel"
+for rel_path in "${FILES[@]}"; do
+    dest="$DEST_ROOT/models/$rel_path"
     # install -d: mkdir -p that also hands the new directory to $OWNER, so
     # nothing on the volume is left owned by root.
     install -d -o "$OWNER_UID" -g "$OWNER_GID" "$(dirname "$dest")"
 
-    echo "Fetching $dest_rel from $url_rel..."
+    echo "Fetching $rel_path from $BASE_URL..."
     # -f makes a 404 from http.server a failure; --retry-all-errors also retries
     # a truncated body, which is how a server that dies mid-transfer shows up.
     curl --fail --location --silent --show-error \
          --retry 5 --retry-delay 10 --retry-all-errors \
-         --output "$dest" "$BASE_URL/$url_rel"
+         --output "$dest" "$BASE_URL/$rel_path"
 
     chown "$OWNER_UID:$OWNER_GID" "$dest"
     echo "Installed $dest"

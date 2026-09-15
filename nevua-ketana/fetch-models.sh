@@ -11,22 +11,21 @@
 #   python3 -m http.server 33334 \
 #     --directory /mnt/storage/nevua-ketana-backup/20tb-hdd/llama-models
 #
-# The served tree is flat: one directory per model family at its root, and the
-# llama-server-config.ini at its root belongs to hava-amina. This machine
-# instead nests the model families under models/ (that directory, plus the
-# preset INI at its root, is the whole input to the server — which is why
-# nothing is seeded into /etc), and its preset INI and chat template are
-# machine-scoped, served from the nevua-ketana/ subdirectory (the same pattern
-# hava-amina/ uses). So each fetch is a pair — the URL path under the served
-# directory and the destination path under DEST_ROOT — not one string playing
-# both roles. The model paths inside llama-server-config.ini are the
-# destination paths with /llama-cpp in front.
+# The served tree is flat — one directory per model family at its root — and
+# this machine nests the same families under models/, so one path string is
+# both the URL suffix and the suffix under DEST_ROOT/models. The preset INI
+# is the only exception: machine-scoped, served from the nevua-ketana/
+# subdirectory (the tree root's llama-server-config.ini is a stale early
+# hava-amina preset). That INI plus the models/ directory is the whole input
+# to the server, which is why nothing is seeded into /etc. The model paths
+# inside llama-server-config.ini are the destination paths with /llama-cpp in
+# front.
 #
 # Only the model this machine actually serves is fetched here — one ~30 GB
-# GGUF, its mmproj, its chat template and the router's preset INI. The whole
-# tree is several TB (~6 h on the wire); when that restore happens the model
-# families land in the same models/ subdirectory the paths below build, so the
-# destination side needs no change.
+# GGUF, its mmproj, the shared chat template and the router's preset INI. The
+# whole tree is several TB (~6 h on the wire); when that restore happens the
+# model families land in the same models/ subdirectory the paths below build,
+# so the destination side needs no change.
 #
 # Every file is fetched unconditionally, straight over whatever is at the
 # destination. This runs once, on a volume that was just formatted, and
@@ -44,12 +43,12 @@ MNT_POINT="/var/mnt/storage"          # must match var-mnt-storage.mount's Where
 DEST_ROOT="$MNT_POINT/llama-models"   # bind-mounted as /llama-cpp in llama-server.container
 OWNER="keelan"
 
-# Pairs of "URL path destination path" (relative to the served directory and
-# to $DEST_ROOT respectively; no path here contains a space).
+# Paths relative to the served directory; each is installed at the same path
+# under $DEST_ROOT/models.
 FILES=(
-  "Qwen3.8-27B-GGUF/Qwen3.8-27B-UD-Q8_K_XL.gguf models/Qwen3.8-27B-GGUF/Qwen3.8-27B-UD-Q8_K_XL.gguf"
-  "Qwen3.8-27B-GGUF/mmproj-BF16.gguf models/Qwen3.8-27B-GGUF/mmproj-BF16.gguf"
-  "nevua-ketana/chat_template.jinja models/froggeric__Qwen-Fixed-Chat-Templates/chat_template.jinja"
+  "Qwen3.8-27B-GGUF/Qwen3.8-27B-UD-Q8_K_XL.gguf"
+  "Qwen3.8-27B-GGUF/mmproj-BF16.gguf"
+  "Qwen-Fixed-Chat-Templates/chat_template.jinja"
 )
 
 [ "$EUID" -eq 0 ] || { echo "Please run as root (sudo)." >&2; exit 1; }
@@ -90,12 +89,12 @@ fi
 # The tree itself, not only its contents: llama-server-config.ini lives at its
 # root and $OWNER edits that file without sudo, so the directory has to belong to
 # $OWNER as well. install -d inside the loop chowns only the directory it is
-# given, and the parents it creates on the way there land as root.
+# given, and the parents it created on the way there land as root.
 install -d -o "$OWNER_UID" -g "$OWNER_GID" "$DEST_ROOT"
 
-# The preset INI is served from the machine-scoped nevua-ketana/ subdirectory —
-# the tree root's llama-server-config.ini is hava-amina's — and installed at
-# the tree root, where the container's --models-preset reads it.
+# The preset INI is served from the machine-scoped nevua-ketana/ subdirectory
+# and installed at the tree root, where the container's --models-preset reads
+# it.
 echo "Fetching llama-server-config.ini from $BASE_URL/nevua-ketana/..."
 curl --fail --location --silent --show-error \
      --retry 5 --retry-delay 10 --retry-all-errors \
@@ -104,20 +103,18 @@ curl --fail --location --silent --show-error \
 chown "$OWNER_UID:$OWNER_GID" "$DEST_ROOT/llama-server-config.ini"
 echo "Installed $DEST_ROOT/llama-server-config.ini"
 
-for entry in "${FILES[@]}"; do
-    url_rel="${entry%% *}"
-    dest_rel="${entry#* }"
-    dest="$DEST_ROOT/$dest_rel"
+for rel_path in "${FILES[@]}"; do
+    dest="$DEST_ROOT/models/$rel_path"
     # install -d: mkdir -p that also hands the new directory to $OWNER, so
     # nothing on the volume is left owned by root.
     install -d -o "$OWNER_UID" -g "$OWNER_GID" "$(dirname "$dest")"
 
-    echo "Fetching $dest_rel from $url_rel..."
+    echo "Fetching $rel_path from $BASE_URL..."
     # -f makes a 404 from http.server a failure; --retry-all-errors also retries
     # a truncated body, which is how a server that dies mid-transfer shows up.
     curl --fail --location --silent --show-error \
          --retry 5 --retry-delay 10 --retry-all-errors \
-         --output "$dest" "$BASE_URL/$url_rel"
+         --output "$dest" "$BASE_URL/$rel_path"
 
     chown "$OWNER_UID:$OWNER_GID" "$dest"
     echo "Installed $dest"
