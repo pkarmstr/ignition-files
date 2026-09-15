@@ -37,11 +37,12 @@ The generated `.ign` is served over plain HTTP from this machine (erevrav,
 | `builds/` (the generated `.ign` files) | 33333 | `coreos-installer --ignition-url` | during the install — either machine |
 | `/mnt/storage/nevua-ketana-backup/20tb-hdd/llama-models` | 33334 | `fetch-models.service` (boot 4) | from the first boot of either machine's install |
 
-The model server is the shared model library: nevua-ketana's
-`fetch-models.sh` reads from its root (its preset INI is the tree root's
-`llama-server-config.ini`), while hava-amina's reads its preset from the
-`hava-amina/` subdirectory (its INI lives there on erevrav) and takes its model
-shards and chat template from the same shared paths.
+The model server is the shared model library: both machines take their model
+families from the flat family directories at its root, and each reads its
+preset INI from its machine-scoped subdirectory (`nevua-ketana/` and
+`hava-amina/`) — nevua-ketana's chat template is served from there too. The
+`llama-server-config.ini` at the tree root is an early hava-amina preset, now
+fetched by nothing.
 
 ```bash
 ./butane.sh nevua-ketana      # regenerate the .ign first
@@ -51,8 +52,10 @@ shards and chat template from the same shared paths.
 `serve.py` runs the two `http.server` instances in one process and stops both on
 Ctrl+C, so it lives happily in a tmux pane for the whole install. The two served
 directories are the two variables at the top of it — the model directory it
-serves is the layout under `/var/mnt/storage/llama-models`, so one path is both
-the URL and the destination. Either machine's boot 4 needs both servers.
+serves is the shared model library on erevrav. Neither machine's destination
+tree mirrors it one for one (nevua-ketana nests its model families under
+`models/`), so each `fetch-models.sh` pairs every URL path with its destination
+path. Either machine's boot 4 needs both servers.
 
 Then boot the machine into the Fedora CoreOS live image and install onto the
 drive the machine's `HARDWARE.md` names as its OS drive. Use the by-id path,
@@ -128,7 +131,7 @@ FCOS has no `/etc/fstab` (and mutating one at runtime is an anti-pattern on an i
 - **Same-boot mount.** Because the gate fails early in boot 4, the unit is not retried by itself, so `setup-storage.service` ends with `ExecStart=/usr/bin/systemctl --no-block start var-mnt-storage.mount`. `--no-block` is mandatory: a blocking `systemctl start` from inside a oneshot can deadlock the transaction.
 - **`WantedBy=multi-user.target`, not `local-fs.target`,** together with `nofail` in `Options=`. `nofail` is swallowed by libmount (never reaches the kernel) but it drops systemd's automatic `Before=local-fs.target` ordering, so a missing or degraded volume can never stall the local-fs phase — `multi-user.target` only `Wants=` the mount, so a failed mount is a failed unit, not a hung boot. It also has to be `enabled` (with an `[Install]` section): systemd ≥ v257 no longer injects `local-fs.target Wants=<mount>`, so nothing pulls a mount unit in on its own.
 - **`x-systemd.*` options are fstab-only** (`x-systemd.device-timeout=`, `x-systemd.mount-timeout=`, `x-systemd.makefs`). `systemd.mount(5)` states they are ignored when written in a unit's `Options=`, which is why they are not used.
-- **`llama-server.container` depends on it** via `RequiresMountsFor=/var/mnt/storage`, so the container cannot start against an empty mount point (its `/models` bind source lives on the volume) and lose its `--models-preset`.
+- **`llama-server.container` depends on it** via `RequiresMountsFor=/var/mnt/storage`, so the container cannot start against an empty mount point (its `/llama-cpp` bind source lives on the volume) and lose its `--models-preset`.
 - **hava-amina's `var-mnt-storage.mount`** follows the same nofail / multi-user
   rules but has **no condition gate**: its disk is a plain whole-disk XFS volume
   formatted by Ignition on the first boot, so the device exists whenever the
@@ -160,25 +163,24 @@ starts against them. Notes on how that is wired:
   failure, so `Restart=always` never crash-loops on an empty volume. On the boot
   that fetches, the marker appears after that unit's job was already skipped, so
   `fetch-models.service` ends with `systemctl --no-block start llama-server.service`.
-- **Layout.** `/var/mnt/storage/llama-models` is bind-mounted as `/models` — the
-  models sit directly under `/models`, no extra `llama-models` layer in the
-  container, and so does `llama-server-config.ini`, which is the file the server
-  reads as its `--models-preset` — and that directory mirrors the served
-  directory (the old box's `llama-models`) one for one. So the paths in
-  `llama-server-config.ini` (under `/models`), in `fetch-models.sh` (under
-  `DEST_ROOT`) and on disk are the same paths. A later full restore is an `rsync`
-  of that one directory — no renaming, no re-linking, config included.
+- **Layout.** `/var/mnt/storage/llama-models` is bind-mounted as `/llama-cpp`:
+  the model families sit under `/llama-cpp/models/...` and
+  `llama-server-config.ini` at its root, which is the file the server reads as
+  its `--models-preset` — one directory is the whole input to the server. Both
+  machines use it, and it is the layout a later full-library restore `rsync`s
+  into — no renaming, no re-linking, config included.
 
 ## The llama.cpp server
 
 One container is the whole server: the rootful quadlet
 `/etc/containers/systemd/llama-server.container`, writing the unit
 `llama-server.service`, with exactly one bind: the model tree
-`/var/mnt/storage/llama-models` → `/models`, which also carries the preset INI.
+`/var/mnt/storage/llama-models` → `/llama-cpp`, which carries the preset INI at
+its root.
 
 ### Router mode
 
-`--models-preset /models/llama-server-config.ini` runs llama.cpp in **router
+`--models-preset /llama-cpp/llama-server-config.ini` runs llama.cpp in **router
 mode**: each INI section is a model ID, and the router spawns a child
 `llama-server` instance for the one a client asks for, then loads and unloads
 them on demand.
@@ -219,34 +221,38 @@ run. Preserving that volume means commenting out its `storage.disks` /
 
 `llama-server-config.ini` is part of the model tree, not of the OS. Nothing in
 `/etc` points at it, and the box's copy is owned by `keelan`, so editing it needs
-no sudo. Three copies exist and each has a job:
+no sudo. On the box it is generated by `generate-config` from `defaults.toml`
++ `machines/nevua-ketana.toml` in the `llama-models` git repo that the tree
+lives in ("do not edit by hand"), so the real edit is in the toml. Three
+copies exist and each has a job:
 
 | Copy | Role |
 |---|---|
-| the served directory on erevrav | what a fresh install fetches — an entry in `FILES`, byte-size checked like every other file |
-| this repo | the copy git keeps, so a preset change is reviewable |
+| `nevua-ketana/llama-server-config.ini` in the served tree on erevrav | what a fresh install fetches |
+| the `llama-models` git repo on the box | source of truth: `defaults.toml` + `machines/nevua-ketana.toml` generate the INI |
 | `/var/mnt/storage/llama-models/` on the box | what the server actually reads |
 
-An edit therefore has three destinations and one restart:
+An edit therefore has two destinations and one restart:
 
 ```bash
-vi llama-server-config.ini                                                      # git records it
-scp llama-server-config.ini keelan@192.168.0.45:/var/mnt/storage/llama-models/  # the live box (no sudo)
-cp llama-server-config.ini /mnt/storage/nevua-ketana-backup/20tb-hdd/llama-models/  # future installs
-ssh keelan@192.168.0.45 'sudo systemctl restart llama-server.service'           # apply
+# in the box's llama-models repo: edit machines/nevua-ketana.toml, regenerate
+scp llama-server-config.ini keelan@192.168.0.45:/var/mnt/storage/llama-models/              # the live box (no sudo)
+cp llama-server-config.ini /mnt/storage/nevua-ketana-backup/20tb-hdd/llama-models/nevua-ketana/  # future installs
+ssh keelan@192.168.0.45 'sudo systemctl restart llama-server.service'                       # apply
 ```
 
 A config change needs a **restart only**: no `daemon-reload` (that is for quadlet
 edits, where the generator has to re-run) and no `.ign` rebuild (that only
 matters on a reinstall). The router reads the presets once per process start —
-watch for `Loaded N custom model presets from /models/llama-server-config.ini` —
+watch for `Loaded N custom model presets from /llama-cpp/llama-server-config.ini` —
 and the restart recreates the container, so the resident model goes with it and
 returns on the next request. `fetch-models.sh` is not a sync mechanism: it runs
 once per provisioning and its marker keeps it that way.
 
 (The served directory also still holds `config.ini`, the *old* machine's preset
-file with `/mnt/20tb-hdd/...` paths. It is fetched by nothing and read by nobody;
-reconciling the two files is open work.)
+file with `/mnt/20tb-hdd/...` paths, and a root `llama-server-config.ini`, an
+early hava-amina preset. Both are fetched by nothing and read by nobody;
+cleaning them up is open work.)
 
 ### Pull on boot
 

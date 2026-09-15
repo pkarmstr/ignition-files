@@ -184,7 +184,7 @@ chown "$STORAGE_UID:$STORAGE_GID" "$MNT_POINT"
 # inherits unlabeled_t too. It is invisible from this account: unconfined_t
 # (keelan, ssh, sudo) is allowed unlabeled_t, so the volume reads and writes
 # fine. A confined domain is not — llama-server.container bind-mounts this
-# volume as /models, and it would be denied on every file there, with an AVC
+# volume as /llama-cpp, and it would be denied on every file there, with an AVC
 # naming a label nobody set on purpose. restorecon applies the policy default
 # (/var/mnt -> mnt_t via file_contexts.subs_dist); -F because the current label
 # is not a *wrong* default, it is the absence of one. The result is an on-disk
