@@ -51,6 +51,18 @@ FILES=(
 
 [ "$EUID" -eq 0 ] || { echo "Please run as root (sudo)." >&2; exit 1; }
 
+# Kill switch: the same lock as setup-storage.sh. Present means the model
+# tree already exists on the volume: skip the fetch, write the done marker so
+# llama-server.service starts, and remove the lock — we are the last checker,
+# so this keeps a later deliberate re-run from silently no-oping.
+LOCK_FILE="/var/lib/provision.lock"
+if [ -e "$LOCK_FILE" ]; then
+    echo "Lock file $LOCK_FILE present: skipping model fetch."
+    touch /var/lib/fetch-models.done
+    rm -f "$LOCK_FILE"
+    exit 0
+fi
+
 # uid/gid looked up, never hardcoded — see step 10 of setup-storage.sh.
 OWNER_UID=$(id -u "$OWNER")
 OWNER_GID=$(id -g "$OWNER")

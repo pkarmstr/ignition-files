@@ -71,6 +71,18 @@ MNT_POINT="/var/mnt/storage"   # must match var-mnt-storage.mount's Where=
 
 [ "$EUID" -eq 0 ] || { echo "Please run as root (sudo)." >&2; exit 1; }
 
+# Kill switch: Ignition writes this file only when it is listed in config.bu.
+# Present means the data disks already hold the volume we want to keep: skip
+# the destructive work, write the done marker, and let setup-storage.service
+# mount the existing volume and disable itself. fetch-models.sh removes the
+# file after it checks it, so it never outlives the boot that consumed it.
+LOCK_FILE="/var/lib/provision.lock"
+if [ -e "$LOCK_FILE" ]; then
+    echo "Lock file $LOCK_FILE present: skipping storage setup."
+    touch /var/lib/setup-storage.done
+    exit 0
+fi
+
 for d in "$CACHE_DEV" "$BACKING_DEV"; do
   [ "$d" != "$OS_DEV" ] || { echo "Error: $d is the OS disk." >&2; exit 1; }
   [ -b "$d" ] || { echo "Error: $d not found (check the by-id paths in HARDWARE.md)." >&2; exit 1; }

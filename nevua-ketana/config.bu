@@ -63,6 +63,22 @@ storage:
       contents:
         local: fetch-models.sh
 
+    # --- Kill switch (nevua-ketana) ---
+    # If this file exists at first boot, setup-storage.sh and fetch-models.sh
+    # skip their work (no wipe, no fetch) and write their done markers as if
+    # they had run, so the chain continues against whatever is already on the
+    # data disks: var-mnt-storage.mount mounts the existing volume and
+    # llama-server.service starts against the existing model tree. An install
+    # that preserves the existing volume and models instead of recreating
+    # them. Comment this entry out (and rebuild) for a fresh install that
+    # formats and fetches. fetch-models.sh removes the file once consumed, so
+    # it never survives on the box.
+    - path: /var/lib/provision.lock
+      mode: 0644
+      overwrite: true
+      contents:
+        inline: 'kill switch: skip storage setup and model fetch'
+
     # --- llama.cpp server: Podman quadlet ---
     # The router's --models-preset INI is deliberately not seeded here: it lives
     # in the model tree and arrives with fetch-models.sh, so nothing under /etc
