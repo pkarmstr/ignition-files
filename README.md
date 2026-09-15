@@ -196,9 +196,9 @@ them on demand.
 - **Nothing is preloaded.** The log says `starting server in router mode. models will be automatically loaded on-demand`, and a model appears only when a client asks for it (or you `POST /models/load`). `unloaded` in `/v1/models` on a freshly started server is normal, not broken.
 - **The health check is liveness only** — `curl -fsS http://127.0.0.1:8001/health` every 30 s, 60 s start period, and deliberately **no** `HealthOnFailure`: an HTTP check must not be able to kill a session. `curl` is in the image, `wget` is not.
 
-### Kill switch (nevua-ketana)
+### Kill switch
 
-The `.bu` carries a `storage.files` entry that writes `/var/lib/provision.lock`
+nevua-ketana's `.bu` carries a `storage.files` entry that writes `/var/lib/provision.lock`
 at install time. If the file exists at boot 4, `setup-storage.sh` skips the
 destructive wipe/build and `fetch-models.sh` skips the download; each writes
 its own done marker as if it had run, so `var-mnt-storage.mount` mounts the
@@ -207,6 +207,13 @@ tree — an install that preserves what is already on the data disks instead of
 recreating it. `fetch-models.sh` removes the lock after it consumes it, so it
 never survives on the box. To go back to normal provisioning, comment out the
 entry in the `.bu` and rebuild the `.ign`.
+
+`hava-amina` carries the same entry (commented out for now) and the same
+guard in its `fetch-models.sh`, but there the lock gates **only the model
+fetch**: the disk wipe is Ignition's declarative storage, which runs before
+any unit and cannot be skipped based on a file written in the same Ignition
+run. Preserving that volume means commenting out its `storage.disks` /
+`storage.filesystems` entries instead.
 
 ### Changing the model config
 
