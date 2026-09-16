@@ -25,6 +25,11 @@ directory and substituted into a temp copy before transpiling.
 directory, so 'local:' references in the .bu resolve relative to it.
 Do not pass --files-dir yourself.
 
+Files in the repo-level 'shared/' directory are meant to be embedded by
+multiple machine configs: they are copied into the machine directory (under
+their own name) before transpiling and removed afterwards. In a .bu, refer
+to a shared file with 'local: <name>'.
+
 The working directory is mounted into the container read-only, so the
 machine directory must be relative to the working directory
 (no absolute paths, no '..').
@@ -100,7 +105,22 @@ done
 
 TMP_BU="$MACHINE_DIR/.config.bu.resolved"
 TMP_OUT="$(mktemp)"
-trap 'rm -f "$TMP_OUT" "$TMP_BU"' EXIT
+# butane refuses 'local:' paths that leave --files-dir, so shared files are
+# copied into the machine dir for the build and removed with the temps.
+SHARED_COPIES=""
+if [ -d shared ]; then
+  shopt -s dotglob nullglob
+  for f in shared/*; do
+    base="$(basename "$f")"
+    if [ -e "$MACHINE_DIR/$base" ]; then
+      echo "Error: shared file 'shared/$base' conflicts with '$MACHINE_DIR/$base'." >&2
+      exit 1
+    fi
+    cp "$f" "$MACHINE_DIR/$base"
+    SHARED_COPIES="$SHARED_COPIES $MACHINE_DIR/$base"
+  done
+fi
+trap 'rm -f "$TMP_OUT" "$TMP_BU" $SHARED_COPIES' EXIT
 
 # Restrict substitution to the secret variables: a bare envsubst would also
 # expand things like $IFACE inside the embedded scripts.
