@@ -16,13 +16,10 @@ Provisioning configs for FCOS (Fedora CoreOS) machines using [Butane](https://co
 #   USER_SSH_PUBLIC_KEY='ssh-rsa ...'
 
 # 'local:' file references (embedded scripts, config files) are resolved
-# relative to the machine directory. butane.sh passes --files-dir to the
-# container automatically — don't pass it yourself.
-
-# Files in the repo-level 'shared/' directory are embedded by multiple
-# machine configs: butane.sh copies them into the machine directory for the
-# build. Refer to one in a .bu with 'local: <name>', e.g.
-# 'local: .tmux.conf' for shared/.tmux.conf.
+# relative to the repo root. butane.sh passes --files-dir to the container
+# automatically — don't pass it yourself. Machine files are referenced as
+# 'local: <machine-dir>/<name>' and files shared by several machines as
+# 'local: shared/<name>'.
 
 # Pass any butane args before the machine directory
 ./butane.sh --pretty nevua-ketana
@@ -331,7 +328,7 @@ ignition-files/
 ├── builds/ (gitignored)          # Generated .ign files, one per machine
 ├── README.md                     # This file
 ├── AGENTS.md                     # Rules for AI agents working in this repo
-├── shared/                       # Files embedded by multiple machines (copied into the machine dir by butane.sh)
+├── shared/                       # Files embedded by multiple machines (referenced as local: shared/<name>)
 │   └── .tmux.conf                # keelan's tmux config, installed as /home/keelan/.tmux.conf on both machines
 ├── nevua-ketana/                 # One folder per machine: config.bu + its helper files + HARDWARE.md
 │   ├── config.bu                 # Per-machine butane config

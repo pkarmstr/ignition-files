@@ -21,14 +21,11 @@ All arguments before the machine directory are passed through to butane.
 Secrets (\${USER_PASSWORD_HASH}, \${USER_SSH_PUBLIC_KEY}) are not committed in
 the .bu: they are read from a gitignored 'secrets.env' in the machine
 directory and substituted into a temp copy before transpiling.
-'--files-dir' is managed by this script: it is set to the machine
-directory, so 'local:' references in the .bu resolve relative to it.
+'--files-dir' is managed by this script: it is set to the repo root
+(the working directory), so 'local:' references in the .bu resolve
+relative to it — machine files as '<machine-dir>/<name>', files shared
+by several machines as 'shared/<name>'.
 Do not pass --files-dir yourself.
-
-Files in the repo-level 'shared/' directory are meant to be embedded by
-multiple machine configs: they are copied into the machine directory (under
-their own name) before transpiling and removed afterwards. In a .bu, refer
-to a shared file with 'local: <name>'.
 
 The working directory is mounted into the container read-only, so the
 machine directory must be relative to the working directory
@@ -105,22 +102,7 @@ done
 
 TMP_BU="$MACHINE_DIR/.config.bu.resolved"
 TMP_OUT="$(mktemp)"
-# butane refuses 'local:' paths that leave --files-dir, so shared files are
-# copied into the machine dir for the build and removed with the temps.
-SHARED_COPIES=""
-if [ -d shared ]; then
-  shopt -s dotglob nullglob
-  for f in shared/*; do
-    base="$(basename "$f")"
-    if [ -e "$MACHINE_DIR/$base" ]; then
-      echo "Error: shared file 'shared/$base' conflicts with '$MACHINE_DIR/$base'." >&2
-      exit 1
-    fi
-    cp "$f" "$MACHINE_DIR/$base"
-    SHARED_COPIES="$SHARED_COPIES $MACHINE_DIR/$base"
-  done
-fi
-trap 'rm -f "$TMP_OUT" "$TMP_BU" $SHARED_COPIES' EXIT
+trap 'rm -f "$TMP_OUT" "$TMP_BU"' EXIT
 
 # Restrict substitution to the secret variables: a bare envsubst would also
 # expand things like $IFACE inside the embedded scripts.
@@ -147,12 +129,12 @@ fi
 mkdir -p "$BUILD_DIR"
 echo "Transpiling '$INPUT_FILE' into '$OUTPUT_FILE'..."
 echo "Image: $BUTANE_IMAGE"
-echo "Args: ${BUTANE_ARGS[*]:-<none>} --files-dir /cwd/$MACHINE_DIR"
+echo "Args: ${BUTANE_ARGS[*]:-<none>} --files-dir /cwd"
 
 # Write to a temp file first so a failed run never leaves a truncated/empty
 # .ign behind.
 if ! docker run --rm -v "$(pwd):/cwd:ro" "$BUTANE_IMAGE" \
-    "${BUTANE_ARGS[@]}" --files-dir "/cwd/$MACHINE_DIR" "/cwd/$TMP_BU" > "$TMP_OUT"; then
+    "${BUTANE_ARGS[@]}" --files-dir /cwd "/cwd/$TMP_BU" > "$TMP_OUT"; then
   echo "Error: butane transpilation failed (see docker output above)." >&2
   exit 1
 fi

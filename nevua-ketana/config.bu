@@ -31,7 +31,7 @@ storage:
       mode: 0644
       overwrite: true
       contents:
-        local: .tmux.conf
+        local: shared/.tmux.conf
 
     # Machine-specific: hostname (nevua-ketana)
     - path: /etc/hostname
@@ -61,14 +61,14 @@ storage:
       mode: 0755
       overwrite: true
       contents:
-        local: setup-storage.sh
+        local: nevua-ketana/setup-storage.sh
 
     # --- Machine-specific: model fetch script (nevua-ketana) ---
     - path: /usr/local/bin/fetch-models.sh
       mode: 0755
       overwrite: true
       contents:
-        local: fetch-models.sh
+        local: nevua-ketana/fetch-models.sh
 
     # --- Kill switch (nevua-ketana) ---
     # If this file exists at first boot, setup-storage.sh and fetch-models.sh
@@ -96,7 +96,7 @@ storage:
       mode: 0644
       overwrite: true
       contents:
-        local: llama-server.container
+        local: nevua-ketana/llama-server.container
 
     # --- llama.cpp server: firewalld rule for port 8001 ---
     # NOTE: plain .service file, so it must live in /etc/systemd/system
@@ -106,7 +106,7 @@ storage:
       mode: 0644
       overwrite: true
       contents:
-        local: llama-server-firewall.service
+        local: nevua-ketana/llama-server-firewall.service
 
 systemd:
   units:
