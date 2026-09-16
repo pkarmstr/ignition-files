@@ -26,6 +26,16 @@ storage:
   # setup in one file means one place to read and one place to test.
 
   files:
+    # --- Shared: keelan's tmux config ---
+    - path: /home/keelan/.tmux.conf
+      mode: 0644
+      overwrite: true
+      contents:
+        inline: |
+          set -g mouse on
+          set -g extended-keys on
+          set -g extended-keys-format csi-u
+
     # Machine-specific: hostname (nevua-ketana)
     - path: /etc/hostname
       mode: 0644

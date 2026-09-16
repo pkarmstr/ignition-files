@@ -59,6 +59,16 @@ storage:
       wipe_filesystem: true
 
   files:
+    # --- Shared: keelan's tmux config ---
+    - path: /home/keelan/.tmux.conf
+      mode: 0644
+      overwrite: true
+      contents:
+        inline: |
+          set -g mouse on
+          set -g extended-keys on
+          set -g extended-keys-format csi-u
+
     # Machine-specific: hostname (hava-amina)
     - path: /etc/hostname
       mode: 0644
