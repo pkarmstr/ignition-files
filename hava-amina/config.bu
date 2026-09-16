@@ -66,6 +66,13 @@ storage:
       contents:
         local: shared/.tmux.conf
 
+    # --- Shared: keelan's neovim config ---
+    - path: /home/keelan/.config/nvim/init.lua
+      mode: 0644
+      overwrite: true
+      contents:
+        local: shared/init.lua
+
     # Machine-specific: hostname (hava-amina)
     - path: /etc/hostname
       mode: 0644

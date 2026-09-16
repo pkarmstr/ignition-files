@@ -329,7 +329,8 @@ ignition-files/
 ├── README.md                     # This file
 ├── AGENTS.md                     # Rules for AI agents working in this repo
 ├── shared/                       # Files embedded by multiple machines (referenced as local: shared/<name>)
-│   └── .tmux.conf                # keelan's tmux config, installed as /home/keelan/.tmux.conf on both machines
+│   ├── .tmux.conf                # keelan's tmux config, installed as /home/keelan/.tmux.conf on both machines
+│   └── init.lua                  # keelan's neovim config, installed as /home/keelan/.config/nvim/init.lua on both machines
 ├── nevua-ketana/                 # One folder per machine: config.bu + its helper files + HARDWARE.md
 │   ├── config.bu                 # Per-machine butane config
 │   ├── secrets.env (gitignored)  # Password hash + SSH public key, substituted into the .bu by butane.sh
