@@ -7,11 +7,19 @@ passwd:
       groups:
         - wheel
         - sudo
-      # Values come from the gitignored secrets.env next to this file;
-      # butane.sh substitutes them in before transpiling.
+      # The password hash comes from the gitignored secrets.env next to this
+      # file; butane.sh substitutes it in before transpiling.
       password_hash: ${USER_PASSWORD_HASH}
+      # Public keys are public by definition, so they are committed here
+      # rather than kept in secrets.env. Canonical copies live in keys/
+      # (user-keelan.pub, cluster-<machine>_ed25519.pub); butane has no file
+      # reference for this field, so keep the text in sync with the files.
+      # The cluster keys (passphraseless ed25519) let any box ssh/rsync to any
+      # other; their private keys live in keys/.
       ssh_authorized_keys:
-        - ${USER_SSH_PUBLIC_KEY}
+        - ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAABgQDn6cVqnayaBIfYwpAu2h89YD2s1YVohNK8nD+MXEOvZZlQSjo5nQCdzymjjao87YGCgF83QF5p3yT1kP2fpmIh/MbFcJMCoXlQUP6QQrd5Mel4cRrTczhIk/77zXRDdQ+523aSTzcEN2R2DoriXyqBhdKR3+o/PRplmtVaV1O+P5C3+hzvho4d8TqZInX6RquoL4azJgaL/YdQK/X1vyCKYT9Nko76iM3ORbNbRcdL/qxM2zUie0DITMpwbb8+kT2YKsdDF2XpC7UPMZLOz4QxjZNfwCmh3im/RC7iHyjo5PU47oXniObr0wZ6F0bgnHdMwidVSL6qIkaGRiB4tg1Tw7JHrh7XNomoL0vZ5zdVKKY2ah67As14lbs2xli2fQsmbSGX1oT7ONxufQoAXmxyC973zZy/m4GBchaQUpxzgSfdk7vA7DIe4t2CVJ3wzOx3SSi0Nz8L2lzOCRCtLOZRI7Nj1RkqiyU6e1MdRf8LQtZ1tYQCDyAt/x8l4tNeAKE= keelan@erevrav
+        - ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIBc1irO9+No2NG7nGuE5WcifWXLZKTK21JxiaTU+H5el keelan@nevua-ketana
+        - ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIAkUY5+GFM6HltRJYzQjo1coZeQiepz+6Pj7RKdXm4+U keelan@hava-amina
 
 storage:
 
@@ -39,6 +47,44 @@ storage:
       overwrite: true
       contents:
         local: shared/init.lua
+
+    # --- Cluster SSH (shared by both machines) ---
+    # Fixed host key: a fresh install wipes /var, so sshd would otherwise
+    # generate a new host key and every known_hosts entry (on this box and
+    # the management host) would go stale. Provisioning the same key on
+    # every install keeps the machine's identity constant.
+    - path: /etc/ssh/ssh_host_ed25519_key
+      mode: 0600
+      overwrite: true
+      contents:
+        local: keys/host-nevua-ketana_ed25519
+
+    - path: /etc/ssh/ssh_host_ed25519_key.pub
+      mode: 0644
+      overwrite: true
+      contents:
+        local: keys/host-nevua-ketana_ed25519.pub
+
+    # This box's key for outbound ssh/rsync to the other cluster box.
+    # The .ssh directory itself comes from butane's automatic handling of
+    # ssh_authorized_keys above.
+    - path: /home/keelan/.ssh/id_ed25519-cluster
+      mode: 0600
+      overwrite: true
+      user:
+        name: keelan
+      contents:
+        local: keys/cluster-nevua-ketana_ed25519
+
+    # Pinned host keys for the cluster, so the first ssh/rsync to a peer
+    # needs no host-key prompt (the IPs are fixed per machine).
+    - path: /home/keelan/.ssh/known_hosts
+      mode: 0600
+      overwrite: true
+      user:
+        name: keelan
+      contents:
+        local: keys/known_hosts
 
     # Machine-specific: hostname (nevua-ketana)
     - path: /etc/hostname

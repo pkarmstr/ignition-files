@@ -18,9 +18,12 @@ environment variable).
 All arguments before the machine directory are passed through to butane.
 '--strict' is added automatically unless you already pass it.
 
-Secrets (\${USER_PASSWORD_HASH}, \${USER_SSH_PUBLIC_KEY}) are not committed in
-the .bu: they are read from a gitignored 'secrets.env' in the machine
-directory and substituted into a temp copy before transpiling.
+The password hash (\${USER_PASSWORD_HASH}) is the only secret not committed
+in the .bu: it is read from a gitignored 'secrets.env' in the machine
+directory and substituted into a temp copy before transpiling. SSH public
+keys are public by definition and live in git: canonical copies in keys/,
+inlined in each .bu's ssh_authorized_keys (butane has no file reference for
+that field).
 '--files-dir' is managed by this script: it is set to the repo root
 (the working directory), so 'local:' references in the .bu resolve
 relative to it — machine files as '<machine-dir>/<name>', files shared
@@ -84,14 +87,14 @@ fi
 SECRETS_FILE="$MACHINE_DIR/secrets.env"
 if [ ! -f "$SECRETS_FILE" ]; then
   echo "Error: secrets file '$SECRETS_FILE' not found." >&2
-  echo "Create it with USER_PASSWORD_HASH and USER_SSH_PUBLIC_KEY (see README)." >&2
+  echo "Create it with USER_PASSWORD_HASH (see README)." >&2
   exit 1
 fi
 # shellcheck disable=SC1090
 source "$SECRETS_FILE"
 
 # envsubst is a subprocess, so the values must be exported, not just set.
-SECRETS_VARS='USER_PASSWORD_HASH USER_SSH_PUBLIC_KEY'
+SECRETS_VARS='USER_PASSWORD_HASH'
 for var in $SECRETS_VARS; do
   if [ -z "${!var:-}" ]; then
     echo "Error: '$var' is missing or empty in '$SECRETS_FILE'." >&2

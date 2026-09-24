@@ -9,11 +9,14 @@ Provisioning configs for FCOS (Fedora CoreOS) machines using [Butane](https://co
 # ('--strict' is added automatically by butane.sh)
 ./butane.sh nevua-ketana
 
-# Secrets (the password hash and SSH public key) are NOT in the .bu. They live
-# in a gitignored 'secrets.env' next to the .bu and are substituted into a
-# temp copy by butane.sh at transpile time:
+# The password hash is the only secret not in the .bu. It lives in a
+# gitignored 'secrets.env' next to the .bu and is substituted into a temp
+# copy by butane.sh at transpile time:
 #   USER_PASSWORD_HASH='...'
-#   USER_SSH_PUBLIC_KEY='ssh-rsa ...'
+#
+# SSH public keys are public by definition and are committed: canonical
+# copies in keys/, inlined in each .bu's ssh_authorized_keys (butane has no
+# file reference for that field — keep the two in sync).
 
 # 'local:' file references (embedded scripts, config files) are resolved
 # relative to the repo root. butane.sh passes --files-dir to the container
@@ -331,9 +334,14 @@ ignition-files/
 ├── shared/                       # Files embedded by multiple machines (referenced as local: shared/<name>)
 │   ├── .tmux.conf                # keelan's tmux config, installed as /home/keelan/.tmux.conf on both machines
 │   └── init.lua                  # keelan's neovim config, installed as /home/keelan/.config/nvim/init.lua on both machines
+├── keys/                         # SSH keys: .pub files + known_hosts committed, private keys (no extension) gitignored
+│   ├── user-keelan.pub           # keelan's login key (erevrav); inlined in every .bu's ssh_authorized_keys
+│   ├── host-<machine>_ed25519    # The machine's stable host keypair, installed as /etc/ssh/ssh_host_ed25519_key (private, gitignored)
+│   ├── cluster-<machine>_ed25519 # The machine's outbound keypair, installed as /home/keelan/.ssh/id_ed25519-cluster (private, gitignored)
+│   └── known_hosts               # Pinned host keys for both machines, installed as /home/keelan/.ssh/known_hosts
 ├── nevua-ketana/                 # One folder per machine: config.bu + its helper files + HARDWARE.md
 │   ├── config.bu                 # Per-machine butane config
-│   ├── secrets.env (gitignored)  # Password hash + SSH public key, substituted into the .bu by butane.sh
+│   ├── secrets.env (gitignored)  # Password hash, substituted into the .bu by butane.sh
 │   ├── HARDWARE.md               # Hardware + stable drive identifiers
 │   ├── llama-server.container    # Machine-specific: podman quadlet — pull-on-boot llama.cpp router (embedded via local:)
 │   ├── llama-server-firewall.service # Machine-specific: firewalld rule for port 8001 (embedded via local:)
@@ -350,6 +358,15 @@ ignition-files/
     └── fetch-models.sh           # Machine-specific: pulls the model files from erevrav onto the volume (embedded verbatim as /usr/local/bin/fetch-models.sh)
 ```
 
+### Cluster SSH keys
+
+Every box can ssh/rsync to every other box, and each box keeps a stable host identity across reinstalls:
+
+- **Host keys** (`host-<machine>`): a fresh install wipes `/var`, so sshd would otherwise generate a new host key and every `known_hosts` entry would go stale. Instead each machine's fixed host key is provisioned at every install, so its identity never changes and `known_hosts` entries (on the boxes and on this management host) stay valid forever.
+- **Cluster keys** (`cluster-<machine>`): a passphraseless ed25519 keypair per machine for outbound ssh/rsync. Public keys are public by definition, so all `.pub` files are committed in `keys/` and the same text is inlined in **every** box's `ssh_authorized_keys` (butane has no file reference for that field; keep the two in sync). Adding a machine means generating one keypair, committing its `.pub`, and appending the key to the existing boxes' `ssh_authorized_keys` lists.
+
+Only the private keys are gitignored (`keys/*_ed25519`, the files without a `.pub`); everything else in `keys/` is public. The `.ign` artifacts likewise contain no private key material — only public keys — so they are no more sensitive than the repo itself.
+
 Each `.bu` file is self-contained. Within each file, sections are tagged as **generic** or **machine-specific** via comments:
 
 - **Generic** — shared across all machines (ucore autorebase, package installs, user setup). Copy these into new machine files.
@@ -364,8 +381,8 @@ Butane has no `include` or inheritance mechanism. Any composability requires cus
 1. Make a `<name>/` folder and copy an existing machine's `config.bu` (and the
    helper files it embeds) in as a starting point
 2. Create a `secrets.env` next to the new `.bu` with the machine's
-   `USER_PASSWORD_HASH` and `USER_SSH_PUBLIC_KEY` (the `.bu` carries
-   `${...}` placeholders; butane.sh substitutes them at transpile time)
+   `USER_PASSWORD_HASH` (the `.bu` carries a `${...}` placeholder;
+   butane.sh substitutes it at transpile time)
 3. Update machine-specific sections in the `.bu`:
    - `storage.files` — hostname, WoL script interface
    - `systemd.units` — WoL service, and the storage mount unit (`var-mnt-storage.mount`:
@@ -377,7 +394,8 @@ Butane has no `include` or inheritance mechanism. Any composability requires cus
    a new box's model set is a `FILES` edit plus a `llama-server-config.ini`
    edit, never an Ignition edit.
 5. Remove any units/files that don't apply to the new machine.
-6. Transpile: `./butane.sh new-machine` (writes `builds/new-machine.ign`)
+6. Generate the machine's `host-new-machine_ed25519` and `cluster-new-machine_ed25519` keypairs in `keys/` (the private keys are gitignored by the `keys/*_ed25519` pattern, the `.pub` files are committed), add its host key (fixed IP) to `keys/known_hosts`, and append its cluster public key to every box's `ssh_authorized_keys`, including its own `.bu`.
+7. Transpile: `./butane.sh new-machine` (writes `builds/new-machine.ign`)
 
 ## Butane/Ignition Basics
 

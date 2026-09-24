@@ -4,3 +4,7 @@ builds/
 
 # Secrets substituted into the .bu by butane.sh (password hash, SSH public key)
 secrets.env
+
+# SSH private keys. The .pub files and known_hosts next to them are public
+# material and committed.
+keys/*_ed25519
