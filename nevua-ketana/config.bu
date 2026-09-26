@@ -28,6 +28,21 @@ storage:
       mode: 0755
     - path: /var/mnt/storage
       mode: 0755
+    # Ignition creates the parent dirs of the nvim init.lua file as root:root
+    # unless they are declared explicitly, so both are listed here with
+    # keelan's ownership.
+    - path: /home/keelan/.config
+      mode: 0755
+      user:
+        name: keelan
+      group:
+        name: keelan
+    - path: /home/keelan/.config/nvim
+      mode: 0755
+      user:
+        name: keelan
+      group:
+        name: keelan
 
   # No `disks:` section: the two data disks are wiped by setup-storage.sh (step 1
   # of the script), which also builds the volume. Keeping the wiping and the
@@ -45,6 +60,10 @@ storage:
     - path: /home/keelan/.config/nvim/init.lua
       mode: 0644
       overwrite: true
+      user:
+        name: keelan
+      group:
+        name: keelan
       contents:
         local: shared/init.lua
 
