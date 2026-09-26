@@ -408,3 +408,9 @@ Butane has no `include` or inheritance mechanism. Any composability requires cus
  camelCase. A wrong spelling is only reported as an `unused key` warning and is
  silently dropped from the `.ign` — which is why `butane.sh` always passes `--strict`.
  (This is Butane's YAML schema only; file and unit names in this repo are kebab-case.)
+- Files written by Ignition default to **`root:root`**, and the parent directories
+  Ignition creates implicitly for a file path (e.g. `/home/keelan/.config/nvim`
+  for the nvim `init.lua`) are always `root:root` too. So every file or directory
+  a user must own needs it stated: `user: name: keelan` / `group: name: keelan`
+  on the file, plus an explicit `storage.directories:` entry for any user-owned
+  parent directory. Check both when adding a file under `/home/keelan`.
