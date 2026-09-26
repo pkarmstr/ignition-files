@@ -53,6 +53,10 @@ storage:
     - path: /home/keelan/.tmux.conf
       mode: 0644
       overwrite: true
+      user:
+        name: keelan
+      group:
+        name: keelan
       contents:
         local: shared/.tmux.conf
 
@@ -92,6 +96,8 @@ storage:
       overwrite: true
       user:
         name: keelan
+      group:
+        name: keelan
       contents:
         local: keys/cluster-nevua-ketana_ed25519
 
@@ -101,6 +107,8 @@ storage:
       mode: 0600
       overwrite: true
       user:
+        name: keelan
+      group:
         name: keelan
       contents:
         local: keys/known_hosts
