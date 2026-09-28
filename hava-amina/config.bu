@@ -187,12 +187,12 @@ storage:
     # any unit runs, and Ignition cannot conditionally skip a storage operation
     # based on a file it writes in the same run. To preserve an existing
     # volume, comment out those two entries instead.
-    #
-    # - path: /var/lib/provision.lock
-    #   mode: 0644
-    #   overwrite: true
-    #   contents:
-    #     inline: 'kill switch: skip model fetch'
+
+     - path: /var/lib/provision.lock
+       mode: 0644
+       overwrite: true
+       contents:
+         inline: 'kill switch: skip model fetch'
 
     # --- llama.cpp server: Podman quadlet (Vulkan) ---
     # The router's --models-preset INI is deliberately not seeded here: it lives
